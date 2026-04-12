@@ -58,6 +58,7 @@ profile production {
 if env("ENV") == "dev" {
   logging.level = "debug";
 }
+```
 
 ## Use Cases
 
