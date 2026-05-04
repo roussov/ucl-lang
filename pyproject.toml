@@ -1,4 +1,197 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
 [project]
-name = "ucl"
+name = "ucl-lang"
 version = "0.1.0"
-description = "Universal Configuration Language"
+description = "UCL — Universal Configuration Language parser, evaluator, formatter and tooling"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "vitte-lang" }
+]
+keywords = [
+  "configuration",
+  "parser",
+  "language",
+  "dsl",
+  "ucl",
+  "json",
+  "yaml",
+  "toml"
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Compilers",
+  "Topic :: Software Development :: Interpreters",
+  "Topic :: Utilities"
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.6",
+  "mypy>=1.10",
+  "build>=1.2",
+  "twine>=5.0"
+]
+yaml = [
+  "PyYAML>=6.0"
+]
+toml = [
+  "tomli>=2.0; python_version < '3.11'",
+  "tomli-w>=1.0"
+]
+bench = [
+  "pytest-benchmark>=4.0"
+]
+all = [
+  "PyYAML>=6.0",
+  "tomli>=2.0; python_version < '3.11'",
+  "tomli-w>=1.0",
+  "pytest-benchmark>=4.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/vitte-lang/ucl-lang"
+Repository = "https://github.com/vitte-lang/ucl-lang"
+Issues = "https://github.com/vitte-lang/ucl-lang/issues"
+
+[project.scripts]
+ucl = "ucl_py.cli:main"
+ucl-parse = "ucl_py.tools.parse:main"
+ucl-fmt = "ucl_py.tools.format:main"
+ucl-validate = "ucl_py.tools.validate:main"
+ucl-bench-parser = "bench.python.bench_parser:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/python/ucl_py"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/python/ucl_py",
+  "src/vitte",
+  "bench",
+  "tests",
+  "docs",
+  "README.md",
+  "LICENSE",
+  "pyproject.toml"
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src/python"]
+addopts = [
+  "-ra",
+  "--strict-markers",
+  "--strict-config"
+]
+markers = [
+  "slow: slow tests",
+  "parser: parser tests",
+  "lexer: lexer tests",
+  "eval: evaluator tests",
+  "format: formatter tests",
+  "validate: validation tests",
+  "bench: benchmark tests"
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/python/ucl_py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 80
+exclude_lines = [
+  "pragma: no cover",
+  "if __name__ == .__main__.:",
+  "raise NotImplementedError",
+  "if TYPE_CHECKING:"
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src/python", "tests", "bench"]
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "B",
+  "UP",
+  "SIM",
+  "PL",
+  "RUF"
+]
+ignore = [
+  "PLR0911",
+  "PLR0912",
+  "PLR0913",
+  "PLR0915"
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src/python"
+packages = ["ucl_py"]
+strict = true
+warn_unused_configs = true
+warn_return_any = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+src_paths = ["src/python", "tests", "bench"]
+
+[tool.ucl]
+grammar = "docs/grammar/snapshots/ucl-v0.1.ebnf"
+source_root = "src"
+python_root = "src/python"
+vitte_root = "src/vitte"
+test_root = "tests"
+bench_root = "bench"
+
+[tool.ucl.parser]
+strict = true
+recover = true
+emit_tokens = true
+emit_ast = true
+
+[tool.ucl.format]
+indent = 2
+trailing_commas = false
+sort_keys = false
+
+[tool.ucl.bench]
+default_iterations = 500
+default_warmup = 50
+synthetic_size = 65536
