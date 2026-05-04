@@ -1,2 +1,232 @@
-.use sys
-.print "Generating docs"
+<<< =========================================================
+   DotS Documentation Engine — MAX 
+   parse / extract / render / index / search / versioning
+   markdown / html / json / static site / CI publish
+   ========================================================= >>>
+
+.module.docs.
+
+.import.core.fs.
+.import.core.path.
+.import.core.io.
+.import.core.str.
+.import.core.json.
+.import.core.list.
+.import.core.map.
+.import.core.time.
+.import.core.hash.
+.import.core.process.
+
+<<< ===================== Config ===================== >>>
+
+.set.src_dir."docs/src".
+.set.out_dir."docs/site".
+.set.assets_dir."docs/assets".
+.set.cache_dir.".docs_cache".
+
+.set.formats.[ "html", "md", "json" ].
+.set.enable_search.true.
+.set.enable_versioning.true.
+
+.set.docs.list.new.
+.set.index.map.new.
+
+<<< ===================== Utils ===================== >>>
+
+.fn.log.msg.
+  .call.io.print."[docs] ".$msg.
+.end.
+
+.fn.read.file.path.
+  .ret.call.fs.read.$path.
+.end.
+
+.fn.write.file.path.content.
+  .call.fs.mkdir_p.(path.dir.$path).
+  .call.fs.write.$path.$content.
+.end.
+
+.fn.hash.content.c.
+  .ret.call.hash.str.$c.
+.end.
+
+<<< ===================== Parser ===================== >>>
+
+.fn.parse.file.path.
+  .set.raw.call.read.file.$path.
+  .set.ast.call.parser.docs.$raw.
+  .ret.$ast.
+.end.
+
+<<< ===================== Extraction ===================== >>>
+
+.fn.extract.entities.ast.
+  .set.entities.list.new.
+
+  <<< headings >>>
+  .each.h.$ast.headings.
+    .call.list.push.$entities.$h.
+  .end.
+
+  <<< code blocks >>>
+  .each.c.$ast.code_blocks.
+    .call.list.push.$entities.$c.
+  .end.
+
+  <<< links >>>
+  .each.l.$ast.links.
+    .call.list.push.$entities.$l.
+  .end.
+
+  .ret.$entities.
+.end.
+
+<<< ===================== Renderer ===================== >>>
+
+.fn.render.html.ast.
+  .ret.call.renderer.html.$ast.
+.end.
+
+.fn.render.md.ast.
+  .ret.call.renderer.md.$ast.
+.end.
+
+.fn.render.json.ast.
+  .ret.call.json.encode.$ast.
+.end.
+
+<<< ===================== Index ===================== >>>
+
+.fn.index.build.
+  .each.doc.$docs.
+    .each.e.$doc.entities.
+      .call.map.set.$index.$e.id.$e.
+    .end.
+  .end.
+.end.
+
+<<< ===================== Search ===================== >>>
+
+.fn.search.query.q.
+  .set.results.list.new.
+
+  .each.kv.$index.
+    .if call.str.contains.$kv.value.text.$q {
+      .call.list.push.$results.$kv.value.
+    }.
+  .end.
+
+  .ret.$results.
+.end.
+
+<<< ===================== Versioning ===================== >>>
+
+.fn.version.tag.
+  .ret.call.time.now.
+.end.
+
+.fn.version.save.
+  .set.v.call.version.tag.
+  .call.fs.copy_dir.$out_dir.(str.concat."docs/version/".$v).
+.end.
+
+<<< ===================== Pipeline ===================== >>>
+
+.fn.process.file.path.
+  .call.log."file ".$path.
+
+  <<< cache check >>>
+  .set.content.call.read.file.$path.
+  .set.h.call.hash.content.$content.
+  .if call.fs.exists.(str.concat.$cache_dir."/".$h) {
+    .ret.
+  }.
+
+  <<< parse >>>
+  .set.ast.call.parse.file.$path.
+
+  <<< extract >>>
+  .set.entities.call.extract.entities.$ast.
+
+  <<< render formats >>>
+  .each.f.$formats.
+    .if $f == "html" {
+      .set.out.call.render.html.$ast.
+      .call.write.file.(str.concat.$out_dir."/".$path.".html").$out.
+    }.
+    .if $f == "md" {
+      .set.out.call.render.md.$ast.
+      .call.write.file.(str.concat.$out_dir."/".$path.".md").$out.
+    }.
+    .if $f == "json" {
+      .set.out.call.render.json.$ast.
+      .call.write.file.(str.concat.$out_dir."/".$path.".json").$out.
+    }.
+  .end.
+
+  <<< store doc >>>
+  .set.doc.map.new.
+  .set.doc.path.$path.
+  .set.doc.entities.$entities.
+  .call.list.push.$docs.$doc.
+
+  <<< cache mark >>>
+  .call.fs.write.(str.concat.$cache_dir."/".$h)."ok".
+.end.
+
+<<< ===================== Full Build ===================== >>>
+
+.fn.build.all.
+  .call.log."build docs".
+
+  .set.files.call.fs.glob.(str.concat.$src_dir."/**/*.md").
+
+  .each.f.$files.
+    .call.process.file.$f.
+  .end.
+
+  <<< index >>>
+  .call.index.build.
+
+  <<< search index export >>>
+  .if $enable_search {
+    .set.search_json.call.json.encode.$index.
+    .call.write.file.(str.concat.$out_dir."/search.json").$search_json.
+  }.
+
+  <<< versioning >>>
+  .if $enable_versioning {
+    .call.version.save.
+  }.
+
+.end.
+
+<<< ===================== Static Assets ===================== >>>
+
+.fn.copy.assets.
+  .call.fs.copy_dir.$assets_dir.$out_dir.
+.end.
+
+<<< ===================== CI Publish ===================== >>>
+
+.fn.publish.
+  .call.process.exec."git add docs/site".
+  .call.process.exec."git commit -m 'update docs'".
+  .call.process.exec."git push".
+.end.
+
+<<< ===================== Dev Server ===================== >>>
+
+.fn.dev.server.
+  .call.process.exec."python -m http.server 8080 --directory docs/site".
+.end.
+
+<<< ===================== Entry ===================== >>>
+
+.fn.main.
+  .call.build.all.
+  .call.copy.assets.
+  .call.publish.
+.end.
+
+.entry.main.
