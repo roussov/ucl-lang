@@ -1,329 +1,1175 @@
 space vitte/api/evaluate
 
 <<< =========================================================
-   Runtime Values
-========================================================= >>>
+   UCL Runtime Evaluator — MAX
+   values + AST + scopes + diagnostics + functions + builtins
+   source: src/vitte/api/evaluate.vit
+   ========================================================= >>>
 
-form Value {
-    kind: ValueKind
-}
+<<< =========================================================
+   Runtime Values
+   ========================================================= >>>
 
 pick ValueKind {
-    Int(v: i64),
-    Bool(v: bool),
-    String(v: string),
-    List(items: [Value]),
-    Unit
+  Null,
+  Unit,
+  Int(v: i64),
+  Float(v: f64),
+  Bool(v: bool),
+  String(v: string),
+  List(items: [Value]),
+  Object(fields: Map[string, Value]),
+  Function(fn_value: FunctionValue),
+  Native(name: string)
+}
+
+form Value {
+  kind: ValueKind
+}
+
+form FunctionValue {
+  name: string,
+  params: [string],
+  body: Block,
+  closure: *Env
+}
+
+proc value_null() -> Value {
+  give Value { kind: ValueKind.Null }
+}
+
+proc value_unit() -> Value {
+  give Value { kind: ValueKind.Unit }
+}
+
+proc value_int(v: i64) -> Value {
+  give Value { kind: ValueKind.Int(v: v) }
+}
+
+proc value_float(v: f64) -> Value {
+  give Value { kind: ValueKind.Float(v: v) }
+}
+
+proc value_bool(v: bool) -> Value {
+  give Value { kind: ValueKind.Bool(v: v) }
+}
+
+proc value_string(v: string) -> Value {
+  give Value { kind: ValueKind.String(v: v) }
+}
+
+proc value_list(items: [Value]) -> Value {
+  give Value { kind: ValueKind.List(items: items) }
+}
+
+proc value_object(fields: Map[string, Value]) -> Value {
+  give Value { kind: ValueKind.Object(fields: fields) }
+}
+
+proc value_native(name: string) -> Value {
+  give Value { kind: ValueKind.Native(name: name) }
+}
+
+proc value_function(name: string, params: [string], body: Block, closure: *Env) -> Value {
+  give Value {
+    kind: ValueKind.Function(fn_value: FunctionValue {
+      name: name,
+      params: params,
+      body: body,
+      closure: closure
+    })
+  }
 }
 
 <<< =========================================================
-   AST Minimal (runtime aligned)
-========================================================= >>>
+   AST Runtime Aligned
+   ========================================================= >>>
 
 pick Expr {
-    Int(v: i64),
-    Bool(v: bool),
-    String(v: string),
-    Ident(name: string),
-    List(items: [Expr]),
-    Binary(op: BinOp, left: Expr, right: Expr),
-    Call(name: string, args: [Expr])
+  Null,
+  Unit,
+  Int(v: i64),
+  Float(v: f64),
+  Bool(v: bool),
+  String(v: string),
+
+  Ident(name: string),
+  List(items: [Expr]),
+  Object(fields: [ObjectField]),
+
+  Unary(op: UnaryOp, expr: Expr),
+  Binary(op: BinOp, left: Expr, right: Expr),
+  Index(target: Expr, index: Expr),
+  Member(target: Expr, name: string),
+  Call(target: Expr, args: [Expr]),
+
+  IfExpr(cond: Expr, then_expr: Expr, else_expr: Expr),
+  BlockExpr(block: Block)
+}
+
+form ObjectField {
+  name: string,
+  expr: Expr
+}
+
+pick UnaryOp {
+  Neg,
+  Not
 }
 
 pick BinOp {
-    Add, Sub, Mul, Div,
-    Eq,
-    And, Or
+  Add,
+  Sub,
+  Mul,
+  Div,
+  Mod,
+
+  Eq,
+  Ne,
+  Lt,
+  Le,
+  Gt,
+  Ge,
+
+  And,
+  Or
 }
 
 pick Stmt {
-    Let(name: string, expr: Expr),
-    Set(name: string, expr: Expr),
-    Expr(expr: Expr),
-    If(cond: Expr, then_block: Block, else_block: Block),
-    While(cond: Expr, block: Block)
+  Let(name: string, expr: Expr),
+  Set(name: string, expr: Expr),
+  Expr(expr: Expr),
+
+  If(cond: Expr, then_block: Block, else_block: Block),
+  While(cond: Expr, block: Block),
+
+  Function(name: string, params: [string], body: Block),
+  Return(expr: Expr),
+  Break,
+  Continue
 }
 
 form Block {
-    stmts: [Stmt]
+  stmts: [Stmt]
+}
+
+<<< =========================================================
+   Diagnostics
+   ========================================================= >>>
+
+pick EvalLevel {
+  Error,
+  Warning,
+  Note
+}
+
+form EvalDiagnostic {
+  level: EvalLevel,
+  code: string,
+  message: string
+}
+
+form EvalDiagnostics {
+  items: [EvalDiagnostic]
+}
+
+proc eval_diagnostics_new() -> EvalDiagnostics {
+  give EvalDiagnostics { items: [] }
+}
+
+proc eval_diag_error(code: string, message: string) -> EvalDiagnostic {
+  give EvalDiagnostic {
+    level: EvalLevel.Error,
+    code: code,
+    message: message
+  }
+}
+
+proc eval_diag_warning(code: string, message: string) -> EvalDiagnostic {
+  give EvalDiagnostic {
+    level: EvalLevel.Warning,
+    code: code,
+    message: message
+  }
+}
+
+proc eval_push_diag(diags: &mut EvalDiagnostics, diag: EvalDiagnostic) {
+  set diags.items = diags.items + [diag]
+}
+
+proc eval_has_errors(diags: EvalDiagnostics) -> bool {
+  for item in diags.items {
+    if item.level == EvalLevel.Error {
+      give true
+    }
+  }
+
+  give false
+}
+
+<<< =========================================================
+   Control Flow
+   ========================================================= >>>
+
+pick ControlKind {
+  None,
+  Return(value: Value),
+  Break,
+  Continue
+}
+
+form EvalFlow {
+  value: Value,
+  control: ControlKind
+}
+
+proc flow_value(value: Value) -> EvalFlow {
+  give EvalFlow {
+    value: value,
+    control: ControlKind.None
+  }
+}
+
+proc flow_unit() -> EvalFlow {
+  give flow_value(value_unit())
+}
+
+proc flow_return(value: Value) -> EvalFlow {
+  give EvalFlow {
+    value: value,
+    control: ControlKind.Return(value: value)
+  }
+}
+
+proc flow_break() -> EvalFlow {
+  give EvalFlow {
+    value: value_unit(),
+    control: ControlKind.Break
+  }
+}
+
+proc flow_continue() -> EvalFlow {
+  give EvalFlow {
+    value: value_unit(),
+    control: ControlKind.Continue
+  }
+}
+
+proc flow_is_control(flow: EvalFlow) -> bool {
+  match flow.control {
+    case ControlKind.None {
+      give false
+    }
+    else {
+      give true
+    }
+  }
 }
 
 <<< =========================================================
    Environment
-========================================================= >>>
+   ========================================================= >>>
 
 form Env {
-    parent: *Env,
-    store: Map[string, Value]
+  parent: *Env,
+  store: Map[string, Value]
 }
 
 proc env_new(parent: *Env) -> Env {
-    give Env {
-        parent: parent,
-        store: Map.new()
-    }
+  give Env {
+    parent: parent,
+    store: Map.new()
+  }
+}
+
+proc env_has_local(env: *Env, name: string) -> bool {
+  give env.store.has(name)
+}
+
+proc env_has(env: *Env, name: string) -> bool {
+  if env.store.has(name) {
+    give true
+  }
+
+  if env.parent != null {
+    give env_has(env.parent, name)
+  }
+
+  give false
 }
 
 proc env_get(env: *Env, name: string) -> Value {
-    if env.store.has(name) {
-        give env.store.get(name)
-    } else {
-        if env.parent != null {
-            give env_get(env.parent, name)
-        } else {
-            give Value { kind: ValueKind.Unit }
-        }
-    }
+  if env.store.has(name) {
+    give env.store.get(name)
+  }
+
+  if env.parent != null {
+    give env_get(env.parent, name)
+  }
+
+  give value_unit()
+}
+
+proc env_get_checked(env: *Env, name: string, diags: &mut EvalDiagnostics) -> Value {
+  if env.store.has(name) {
+    give env.store.get(name)
+  }
+
+  if env.parent != null {
+    give env_get_checked(env.parent, name, diags)
+  }
+
+  eval_push_diag(
+    diags,
+    eval_diag_error("EVAL001", "unknown identifier: " + name)
+  )
+
+  give value_unit()
+}
+
+proc env_define(env: *Env, name: string, val: Value) {
+  env.store.insert(name, val)
 }
 
 proc env_set(env: *Env, name: string, val: Value) {
+  if env.store.has(name) {
     env.store.insert(name, val)
+    give
+  }
+
+  if env.parent != null and env_has(env.parent, name) {
+    env_set(env.parent, name, val)
+    give
+  }
+
+  env.store.insert(name, val)
+}
+
+proc env_define_builtins(env: *Env) {
+  env_define(env, "print", value_native("print"))
+  env_define(env, "println", value_native("println"))
+  env_define(env, "len", value_native("len"))
+  env_define(env, "type", value_native("type"))
+  env_define(env, "str", value_native("str"))
+  env_define(env, "int", value_native("int"))
+  env_define(env, "bool", value_native("bool"))
+}
+
+<<< =========================================================
+   Value Helpers
+   ========================================================= >>>
+
+proc value_truthy(v: Value) -> bool {
+  match v.kind {
+    case ValueKind.Null {
+      give false
+    }
+
+    case ValueKind.Unit {
+      give false
+    }
+
+    case ValueKind.Bool(b) {
+      give b
+    }
+
+    case ValueKind.Int(i) {
+      give i != 0
+    }
+
+    case ValueKind.Float(f) {
+      give f != 0.0
+    }
+
+    case ValueKind.String(s) {
+      give s != ""
+    }
+
+    case ValueKind.List(items) {
+      give items.len > 0
+    }
+
+    case ValueKind.Object(fields) {
+      give true
+    }
+
+    case ValueKind.Function(fn_value) {
+      give true
+    }
+
+    case ValueKind.Native(name) {
+      give true
+    }
+  }
+
+  give false
+}
+
+proc value_type_name(v: Value) -> string {
+  match v.kind {
+    case ValueKind.Null { give "null" }
+    case ValueKind.Unit { give "unit" }
+    case ValueKind.Int(i) { give "int" }
+    case ValueKind.Float(f) { give "float" }
+    case ValueKind.Bool(b) { give "bool" }
+    case ValueKind.String(s) { give "string" }
+    case ValueKind.List(items) { give "list" }
+    case ValueKind.Object(fields) { give "object" }
+    case ValueKind.Function(fn_value) { give "function" }
+    case ValueKind.Native(name) { give "native" }
+  }
+
+  give "unknown"
+}
+
+proc value_to_string(v: Value) -> string {
+  match v.kind {
+    case ValueKind.Null {
+      give "null"
+    }
+
+    case ValueKind.Unit {
+      give "unit"
+    }
+
+    case ValueKind.Int(i) {
+      give i as string
+    }
+
+    case ValueKind.Float(f) {
+      give f as string
+    }
+
+    case ValueKind.Bool(b) {
+      if b {
+        give "true"
+      }
+
+      give "false"
+    }
+
+    case ValueKind.String(s) {
+      give s
+    }
+
+    case ValueKind.List(items) {
+      let out: string = "[list len=" + items.len as string + "]"
+      give out
+    }
+
+    case ValueKind.Object(fields) {
+      give "[object]"
+    }
+
+    case ValueKind.Function(fn_value) {
+      give "[function " + fn_value.name + "]"
+    }
+
+    case ValueKind.Native(name) {
+      give "[native " + name + "]"
+    }
+  }
+
+  give ""
+}
+
+proc value_eq(a: Value, b: Value) -> bool {
+  match a.kind {
+    case ValueKind.Null {
+      match b.kind {
+        case ValueKind.Null { give true }
+        else { give false }
+      }
+    }
+
+    case ValueKind.Unit {
+      match b.kind {
+        case ValueKind.Unit { give true }
+        else { give false }
+      }
+    }
+
+    case ValueKind.Int(x) {
+      when b.kind is ValueKind.Int(y) {
+        give x == y
+      }
+    }
+
+    case ValueKind.Float(x) {
+      when b.kind is ValueKind.Float(y) {
+        give x == y
+      }
+    }
+
+    case ValueKind.Bool(x) {
+      when b.kind is ValueKind.Bool(y) {
+        give x == y
+      }
+    }
+
+    case ValueKind.String(x) {
+      when b.kind is ValueKind.String(y) {
+        give x == y
+      }
+    }
+
+    else {
+      give false
+    }
+  }
+
+  give false
+}
+
+<<< =========================================================
+   Arithmetic / Binary
+   ========================================================= >>>
+
+proc eval_add(l: Value, r: Value, diags: &mut EvalDiagnostics) -> Value {
+  when l.kind is ValueKind.Int(a) {
+    when r.kind is ValueKind.Int(b) {
+      give value_int(a + b)
+    }
+  }
+
+  when l.kind is ValueKind.Float(a) {
+    when r.kind is ValueKind.Float(b) {
+      give value_float(a + b)
+    }
+  }
+
+  when l.kind is ValueKind.String(a) {
+    when r.kind is ValueKind.String(b) {
+      give value_string(a + b)
+    }
+  }
+
+  eval_push_diag(diags, eval_diag_error("EVAL010", "invalid operands for +"))
+  give value_unit()
+}
+
+proc eval_sub(l: Value, r: Value, diags: &mut EvalDiagnostics) -> Value {
+  when l.kind is ValueKind.Int(a) {
+    when r.kind is ValueKind.Int(b) {
+      give value_int(a - b)
+    }
+  }
+
+  when l.kind is ValueKind.Float(a) {
+    when r.kind is ValueKind.Float(b) {
+      give value_float(a - b)
+    }
+  }
+
+  eval_push_diag(diags, eval_diag_error("EVAL011", "invalid operands for -"))
+  give value_unit()
+}
+
+proc eval_mul(l: Value, r: Value, diags: &mut EvalDiagnostics) -> Value {
+  when l.kind is ValueKind.Int(a) {
+    when r.kind is ValueKind.Int(b) {
+      give value_int(a * b)
+    }
+  }
+
+  when l.kind is ValueKind.Float(a) {
+    when r.kind is ValueKind.Float(b) {
+      give value_float(a * b)
+    }
+  }
+
+  eval_push_diag(diags, eval_diag_error("EVAL012", "invalid operands for *"))
+  give value_unit()
+}
+
+proc eval_div(l: Value, r: Value, diags: &mut EvalDiagnostics) -> Value {
+  when l.kind is ValueKind.Int(a) {
+    when r.kind is ValueKind.Int(b) {
+      if b == 0 {
+        eval_push_diag(diags, eval_diag_error("EVAL013", "division by zero"))
+        give value_unit()
+      }
+
+      give value_int(a / b)
+    }
+  }
+
+  when l.kind is ValueKind.Float(a) {
+    when r.kind is ValueKind.Float(b) {
+      if b == 0.0 {
+        eval_push_diag(diags, eval_diag_error("EVAL014", "division by zero"))
+        give value_unit()
+      }
+
+      give value_float(a / b)
+    }
+  }
+
+  eval_push_diag(diags, eval_diag_error("EVAL015", "invalid operands for /"))
+  give value_unit()
+}
+
+proc eval_mod(l: Value, r: Value, diags: &mut EvalDiagnostics) -> Value {
+  when l.kind is ValueKind.Int(a) {
+    when r.kind is ValueKind.Int(b) {
+      if b == 0 {
+        eval_push_diag(diags, eval_diag_error("EVAL016", "modulo by zero"))
+        give value_unit()
+      }
+
+      give value_int(a % b)
+    }
+  }
+
+  eval_push_diag(diags, eval_diag_error("EVAL017", "invalid operands for %"))
+  give value_unit()
+}
+
+proc eval_compare(op: BinOp, l: Value, r: Value, diags: &mut EvalDiagnostics) -> Value {
+  match op {
+    case BinOp.Eq {
+      give value_bool(value_eq(l, r))
+    }
+
+    case BinOp.Ne {
+      give value_bool(not value_eq(l, r))
+    }
+
+    case BinOp.Lt {
+      when l.kind is ValueKind.Int(a) {
+        when r.kind is ValueKind.Int(b) {
+          give value_bool(a < b)
+        }
+      }
+    }
+
+    case BinOp.Le {
+      when l.kind is ValueKind.Int(a) {
+        when r.kind is ValueKind.Int(b) {
+          give value_bool(a <= b)
+        }
+      }
+    }
+
+    case BinOp.Gt {
+      when l.kind is ValueKind.Int(a) {
+        when r.kind is ValueKind.Int(b) {
+          give value_bool(a > b)
+        }
+      }
+    }
+
+    case BinOp.Ge {
+      when l.kind is ValueKind.Int(a) {
+        when r.kind is ValueKind.Int(b) {
+          give value_bool(a >= b)
+        }
+      }
+    }
+
+    else {
+      eval_push_diag(diags, eval_diag_error("EVAL020", "invalid comparison"))
+      give value_unit()
+    }
+  }
+
+  eval_push_diag(diags, eval_diag_error("EVAL021", "invalid comparison operands"))
+  give value_unit()
+}
+
+proc eval_binary(op: BinOp, left: Expr, right: Expr, env: *Env, diags: &mut EvalDiagnostics) -> Value {
+  if op == BinOp.And {
+    let l: Value = eval_expr(left, env, diags)
+    if not value_truthy(l) {
+      give value_bool(false)
+    }
+
+    let r: Value = eval_expr(right, env, diags)
+    give value_bool(value_truthy(r))
+  }
+
+  if op == BinOp.Or {
+    let l: Value = eval_expr(left, env, diags)
+    if value_truthy(l) {
+      give value_bool(true)
+    }
+
+    let r: Value = eval_expr(right, env, diags)
+    give value_bool(value_truthy(r))
+  }
+
+  let l: Value = eval_expr(left, env, diags)
+  let r: Value = eval_expr(right, env, diags)
+
+  match op {
+    case BinOp.Add { give eval_add(l, r, diags) }
+    case BinOp.Sub { give eval_sub(l, r, diags) }
+    case BinOp.Mul { give eval_mul(l, r, diags) }
+    case BinOp.Div { give eval_div(l, r, diags) }
+    case BinOp.Mod { give eval_mod(l, r, diags) }
+    case BinOp.Eq { give eval_compare(op, l, r, diags) }
+    case BinOp.Ne { give eval_compare(op, l, r, diags) }
+    case BinOp.Lt { give eval_compare(op, l, r, diags) }
+    case BinOp.Le { give eval_compare(op, l, r, diags) }
+    case BinOp.Gt { give eval_compare(op, l, r, diags) }
+    case BinOp.Ge { give eval_compare(op, l, r, diags) }
+    else {
+      eval_push_diag(diags, eval_diag_error("EVAL022", "unknown binary operator"))
+      give value_unit()
+    }
+  }
+}
+
+proc eval_unary(op: UnaryOp, expr: Expr, env: *Env, diags: &mut EvalDiagnostics) -> Value {
+  let v: Value = eval_expr(expr, env, diags)
+
+  match op {
+    case UnaryOp.Not {
+      give value_bool(not value_truthy(v))
+    }
+
+    case UnaryOp.Neg {
+      when v.kind is ValueKind.Int(i) {
+        give value_int(0 - i)
+      }
+
+      when v.kind is ValueKind.Float(f) {
+        give value_float(0.0 - f)
+      }
+
+      eval_push_diag(diags, eval_diag_error("EVAL030", "invalid operand for unary -"))
+      give value_unit()
+    }
+  }
+
+  give value_unit()
+}
+
+<<< =========================================================
+   Builtins
+   ========================================================= >>>
+
+proc eval_builtin(name: string, args: [Value], diags: &mut EvalDiagnostics) -> Value {
+  if name == "print" {
+    for arg in args {
+      emit value_to_string(arg)
+    }
+
+    give value_unit()
+  }
+
+  if name == "println" {
+    for arg in args {
+      emit value_to_string(arg)
+    }
+
+    emit "\n"
+    give value_unit()
+  }
+
+  if name == "len" {
+    if args.len != 1 {
+      eval_push_diag(diags, eval_diag_error("EVAL040", "len expects one argument"))
+      give value_unit()
+    }
+
+    when args[0].kind is ValueKind.String(s) {
+      give value_int(s.len as i64)
+    }
+
+    when args[0].kind is ValueKind.List(items) {
+      give value_int(items.len as i64)
+    }
+
+    eval_push_diag(diags, eval_diag_error("EVAL041", "len expects string or list"))
+    give value_unit()
+  }
+
+  if name == "type" {
+    if args.len != 1 {
+      eval_push_diag(diags, eval_diag_error("EVAL042", "type expects one argument"))
+      give value_unit()
+    }
+
+    give value_string(value_type_name(args[0]))
+  }
+
+  if name == "str" {
+    if args.len != 1 {
+      eval_push_diag(diags, eval_diag_error("EVAL043", "str expects one argument"))
+      give value_unit()
+    }
+
+    give value_string(value_to_string(args[0]))
+  }
+
+  if name == "bool" {
+    if args.len != 1 {
+      eval_push_diag(diags, eval_diag_error("EVAL044", "bool expects one argument"))
+      give value_unit()
+    }
+
+    give value_bool(value_truthy(args[0]))
+  }
+
+  eval_push_diag(diags, eval_diag_error("EVAL045", "unknown builtin: " + name))
+  give value_unit()
+}
+
+proc eval_call(target: Expr, args: [Expr], env: *Env, diags: &mut EvalDiagnostics) -> Value {
+  let callable: Value = eval_expr(target, env, diags)
+  let mut values: [Value] = []
+
+  for arg in args {
+    set values = values + [eval_expr(arg, env, diags)]
+  }
+
+  match callable.kind {
+    case ValueKind.Native(name) {
+      give eval_builtin(name, values, diags)
+    }
+
+    case ValueKind.Function(fn_value) {
+      let local: Env = env_new(fn_value.closure)
+
+      if values.len != fn_value.params.len {
+        eval_push_diag(diags, eval_diag_error("EVAL050", "wrong argument count for function: " + fn_value.name))
+        give value_unit()
+      }
+
+      let i: int = 0
+      while i < fn_value.params.len {
+        env_define(&local, fn_value.params[i], values[i])
+        set i = i + 1
+      }
+
+      let flow: EvalFlow = eval_block_flow(fn_value.body, &local, diags)
+
+      match flow.control {
+        case ControlKind.Return(value) {
+          give value
+        }
+
+        else {
+          give flow.value
+        }
+      }
+    }
+
+    else {
+      eval_push_diag(diags, eval_diag_error("EVAL051", "value is not callable"))
+      give value_unit()
+    }
+  }
 }
 
 <<< =========================================================
    Expression Evaluation
-========================================================= >>>
+   ========================================================= >>>
 
-proc eval_expr(expr: Expr, env: *Env) -> Value {
+proc eval_object(fields: [ObjectField], env: *Env, diags: &mut EvalDiagnostics) -> Value {
+  let out: Map[string, Value] = Map.new()
 
-    match expr {
+  for field in fields {
+    out.insert(field.name, eval_expr(field.expr, env, diags))
+  }
 
-        case Expr.Int(v) {
-            give Value { kind: ValueKind.Int(v: v) }
-        }
+  give value_object(out)
+}
 
-        case Expr.Bool(v) {
-            give Value { kind: ValueKind.Bool(v: v) }
-        }
-
-        case Expr.String(v) {
-            give Value { kind: ValueKind.String(v: v) }
-        }
-
-        case Expr.Ident(name) {
-            give env_get(env, name)
-        }
-
-        case Expr.List(items) {
-            let out = []
-            for item in items {
-                let v = eval_expr(item, env)
-                out.push(v)
-            }
-            give Value { kind: ValueKind.List(items: out) }
-        }
-
-        case Expr.Binary(op, left, right) {
-
-            let l = eval_expr(left, env)
-            let r = eval_expr(right, env)
-
-            match op {
-
-                case BinOp.Add {
-                    when l.kind is ValueKind.Int(a) {
-                        when r.kind is ValueKind.Int(b) {
-                            give Value { kind: ValueKind.Int(v: a + b) }
-                        }
-                    }
-                }
-
-                case BinOp.Sub {
-                    when l.kind is ValueKind.Int(a) {
-                        when r.kind is ValueKind.Int(b) {
-                            give Value { kind: ValueKind.Int(v: a - b) }
-                        }
-                    }
-                }
-
-                case BinOp.Mul {
-                    when l.kind is ValueKind.Int(a) {
-                        when r.kind is ValueKind.Int(b) {
-                            give Value { kind: ValueKind.Int(v: a * b) }
-                        }
-                    }
-                }
-
-                case BinOp.Div {
-                    when l.kind is ValueKind.Int(a) {
-                        when r.kind is ValueKind.Int(b) {
-                            give Value { kind: ValueKind.Int(v: a / b) }
-                        }
-                    }
-                }
-
-                case BinOp.Eq {
-                    give Value { kind: ValueKind.Bool(v: value_eq(l, r)) }
-                }
-
-                case BinOp.And {
-                    when l.kind is ValueKind.Bool(a) {
-                        when r.kind is ValueKind.Bool(b) {
-                            give Value { kind: ValueKind.Bool(v: a and b) }
-                        }
-                    }
-                }
-
-                case BinOp.Or {
-                    when l.kind is ValueKind.Bool(a) {
-                        when r.kind is ValueKind.Bool(b) {
-                            give Value { kind: ValueKind.Bool(v: a or b) }
-                        }
-                    }
-                }
-
-                else {
-                    give Value { kind: ValueKind.Unit }
-                }
-            }
-        }
-
-        case Expr.Call(name, args) {
-
-            if name == "print" {
-                for arg in args {
-                    let v = eval_expr(arg, env)
-                    emit v
-                }
-                give Value { kind: ValueKind.Unit }
-            }
-
-            give Value { kind: ValueKind.Unit }
-        }
-
-        else {
-            give Value { kind: ValueKind.Unit }
-        }
+proc eval_expr(expr: Expr, env: *Env, diags: &mut EvalDiagnostics) -> Value {
+  match expr {
+    case Expr.Null {
+      give value_null()
     }
+
+    case Expr.Unit {
+      give value_unit()
+    }
+
+    case Expr.Int(v) {
+      give value_int(v)
+    }
+
+    case Expr.Float(v) {
+      give value_float(v)
+    }
+
+    case Expr.Bool(v) {
+      give value_bool(v)
+    }
+
+    case Expr.String(v) {
+      give value_string(v)
+    }
+
+    case Expr.Ident(name) {
+      give env_get_checked(env, name, diags)
+    }
+
+    case Expr.List(items) {
+      let out: [Value] = []
+
+      for item in items {
+        let v: Value = eval_expr(item, env, diags)
+        set out = out + [v]
+      }
+
+      give value_list(out)
+    }
+
+    case Expr.Object(fields) {
+      give eval_object(fields, env, diags)
+    }
+
+    case Expr.Unary(op, inner) {
+      give eval_unary(op, inner, env, diags)
+    }
+
+    case Expr.Binary(op, left, right) {
+      give eval_binary(op, left, right, env, diags)
+    }
+
+    case Expr.Index(target, index) {
+      let t: Value = eval_expr(target, env, diags)
+      let i: Value = eval_expr(index, env, diags)
+
+      when t.kind is ValueKind.List(items) {
+        when i.kind is ValueKind.Int(pos) {
+          if pos < 0 or pos >= items.len {
+            eval_push_diag(diags, eval_diag_error("EVAL060", "list index out of range"))
+            give value_unit()
+          }
+
+          give items[pos]
+        }
+      }
+
+      eval_push_diag(diags, eval_diag_error("EVAL061", "invalid index operation"))
+      give value_unit()
+    }
+
+    case Expr.Member(target, name) {
+      let t: Value = eval_expr(target, env, diags)
+
+      when t.kind is ValueKind.Object(fields) {
+        if fields.has(name) {
+          give fields.get(name)
+        }
+
+        eval_push_diag(diags, eval_diag_error("EVAL062", "unknown object field: " + name))
+        give value_unit()
+      }
+
+      eval_push_diag(diags, eval_diag_error("EVAL063", "member access requires object"))
+      give value_unit()
+    }
+
+    case Expr.Call(target, args) {
+      give eval_call(target, args, env, diags)
+    }
+
+    case Expr.IfExpr(cond, then_expr, else_expr) {
+      let c: Value = eval_expr(cond, env, diags)
+
+      if value_truthy(c) {
+        give eval_expr(then_expr, env, diags)
+      }
+
+      give eval_expr(else_expr, env, diags)
+    }
+
+    case Expr.BlockExpr(block) {
+      let flow: EvalFlow = eval_block_flow(block, env, diags)
+      give flow.value
+    }
+  }
+
+  give value_unit()
 }
 
 <<< =========================================================
    Statement Evaluation
-========================================================= >>>
+   ========================================================= >>>
+
+proc eval_stmt_flow(stmt: Stmt, env: *Env, diags: &mut EvalDiagnostics) -> EvalFlow {
+  match stmt {
+    case Stmt.Let(name, expr) {
+      let v: Value = eval_expr(expr, env, diags)
+      env_define(env, name, v)
+      give flow_unit()
+    }
+
+    case Stmt.Set(name, expr) {
+      let v: Value = eval_expr(expr, env, diags)
+      env_set(env, name, v)
+      give flow_unit()
+    }
+
+    case Stmt.Expr(expr) {
+      give flow_value(eval_expr(expr, env, diags))
+    }
+
+    case Stmt.If(cond, then_block, else_block) {
+      let c: Value = eval_expr(cond, env, diags)
+
+      if value_truthy(c) {
+        give eval_block_flow(then_block, env, diags)
+      }
+
+      give eval_block_flow(else_block, env, diags)
+    }
+
+    case Stmt.While(cond, block) {
+      loop while true {
+        let c: Value = eval_expr(cond, env, diags)
+
+        if not value_truthy(c) {
+          break
+        }
+
+        let flow: EvalFlow = eval_block_flow(block, env, diags)
+
+        match flow.control {
+          case ControlKind.None {
+          }
+
+          case ControlKind.Break {
+            give flow_unit()
+          }
+
+          case ControlKind.Continue {
+          }
+
+          case ControlKind.Return(value) {
+            give flow
+          }
+        }
+      }
+
+      give flow_unit()
+    }
+
+    case Stmt.Function(name, params, body) {
+      env_define(env, name, value_function(name, params, body, env))
+      give flow_unit()
+    }
+
+    case Stmt.Return(expr) {
+      let v: Value = eval_expr(expr, env, diags)
+      give flow_return(v)
+    }
+
+    case Stmt.Break {
+      give flow_break()
+    }
+
+    case Stmt.Continue {
+      give flow_continue()
+    }
+  }
+
+  give flow_unit()
+}
 
 proc eval_stmt(stmt: Stmt, env: *Env) -> Value {
-
-    match stmt {
-
-        case Stmt.Let(name, expr) {
-            let v = eval_expr(expr, env)
-            env_set(env, name, v)
-            give Value { kind: ValueKind.Unit }
-        }
-
-        case Stmt.Set(name, expr) {
-            let v = eval_expr(expr, env)
-            env_set(env, name, v)
-            give Value { kind: ValueKind.Unit }
-        }
-
-        case Stmt.Expr(expr) {
-            give eval_expr(expr, env)
-        }
-
-        case Stmt.If(cond, then_block, else_block) {
-
-            let c = eval_expr(cond, env)
-
-            when c.kind is ValueKind.Bool(v) {
-                if v {
-                    give eval_block(then_block, env)
-                } else {
-                    give eval_block(else_block, env)
-                }
-            }
-
-            give Value { kind: ValueKind.Unit }
-        }
-
-        case Stmt.While(cond, block) {
-
-            loop while true {
-
-                let c = eval_expr(cond, env)
-
-                when c.kind is ValueKind.Bool(v) {
-                    if not v {
-                        break
-                    }
-                }
-
-                eval_block(block, env)
-            }
-
-            give Value { kind: ValueKind.Unit }
-        }
-
-        else {
-            give Value { kind: ValueKind.Unit }
-        }
-    }
+  let diags: EvalDiagnostics = eval_diagnostics_new()
+  let flow: EvalFlow = eval_stmt_flow(stmt, env, &diags)
+  give flow.value
 }
 
 <<< =========================================================
-   Block Evaluation
-========================================================= >>>
+   Block / Program Evaluation
+   ========================================================= >>>
+
+proc eval_block_flow(block: Block, env: *Env, diags: &mut EvalDiagnostics) -> EvalFlow {
+  let local: Env = env_new(env)
+  let last: Value = value_unit()
+
+  for stmt in block.stmts {
+    let flow: EvalFlow = eval_stmt_flow(stmt, &local, diags)
+
+    if flow_is_control(flow) {
+      give flow
+    }
+
+    set last = flow.value
+  }
+
+  give flow_value(last)
+}
 
 proc eval_block(block: Block, env: *Env) -> Value {
-
-    let local = env_new(env)
-
-    for stmt in block.stmts {
-        eval_stmt(stmt, &local)
-    }
-
-    give Value { kind: ValueKind.Unit }
+  let diags: EvalDiagnostics = eval_diagnostics_new()
+  let flow: EvalFlow = eval_block_flow(block, env, &diags)
+  give flow.value
 }
 
-<<< =========================================================
-   Helpers
-========================================================= >>>
+proc eval_program(block: Block) -> Value {
+  let env: Env = env_new(null)
+  let diags: EvalDiagnostics = eval_diagnostics_new()
 
-proc value_eq(a: Value, b: Value) -> bool {
+  env_define_builtins(&env)
 
-    match a.kind {
+  let flow: EvalFlow = eval_block_flow(block, &env, &diags)
+  give flow.value
+}
 
-        case ValueKind.Int(x) {
-            when b.kind is ValueKind.Int(y) {
-                give x == y
-            }
-        }
+form EvalResult {
+  value: Value,
+  diagnostics: EvalDiagnostics,
+  success: bool
+}
 
-        case ValueKind.Bool(x) {
-            when b.kind is ValueKind.Bool(y) {
-                give x == y
-            }
-        }
+proc eval_program_checked(block: Block) -> EvalResult {
+  let env: Env = env_new(null)
+  let diags: EvalDiagnostics = eval_diagnostics_new()
 
-        case ValueKind.String(x) {
-            when b.kind is ValueKind.String(y) {
-                give x == y
-            }
-        }
+  env_define_builtins(&env)
 
-        else {
-            give false
-        }
-    }
+  let flow: EvalFlow = eval_block_flow(block, &env, &diags)
 
-    give false
+  give EvalResult {
+    value: flow.value,
+    diagnostics: diags,
+    success: not eval_has_errors(diags)
+  }
+}
+
+proc eval_expr_checked(expr: Expr) -> EvalResult {
+  let env: Env = env_new(null)
+  let diags: EvalDiagnostics = eval_diagnostics_new()
+
+  env_define_builtins(&env)
+
+  let value: Value = eval_expr(expr, &env, &diags)
+
+  give EvalResult {
+    value: value,
+    diagnostics: diags,
+    success: not eval_has_errors(diags)
+  }
 }
 
 <<< =========================================================
    Entry Test
-========================================================= >>>
+   ========================================================= >>>
 
 entry main at vitte/api/evaluate {
+  let env: Env = env_new(null)
+  let diags: EvalDiagnostics = eval_diagnostics_new()
 
-    let env = env_new(null)
+  env_define_builtins(&env)
 
-    let expr = Expr.Binary(
-        op: BinOp.Add,
-        left: Expr.Int(v: 2),
-        right: Expr.Int(v: 40)
-    )
+  let expr: Expr = Expr.Binary(
+    op: BinOp.Add,
+    left: Expr.Int(v: 2),
+    right: Expr.Int(v: 40)
+  )
 
-    let result = eval_expr(expr, &env)
+  let result: Value = eval_expr(expr, &env, &diags)
 
-    emit result
+  emit value_to_string(result)
 }
+
+export *
