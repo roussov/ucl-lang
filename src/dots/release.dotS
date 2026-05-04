@@ -1,2 +1,211 @@
-.use sys
-.print "Releasing version"
+<<< =========================================================
+   DotS Release Engine — MAX ∞
+   version / changelog / build / sign / publish / rollback
+   multi-target / reproducible / CI-ready / secure
+   ========================================================= >>>
+
+.module.release.
+
+.import.core.fs.
+.import.core.path.
+.import.core.io.
+.import.core.str.
+.import.core.json.
+.import.core.list.
+.import.core.map.
+.import.core.hash.
+.import.core.time.
+.import.core.process.
+.import.core.net.
+.import.core.semver.
+.import.core.crypto.
+
+<<< ===================== Config ===================== >>>
+
+.set.pkg_file."package.ucl".
+.set.lock_file."package.lock".
+.set.dist_dir."dist".
+.set.release_dir."release".
+.set.registry_url."https://registry.vitte-lang.org".
+
+.set.targets.[ "linux-x64", "macos-arm64", "windows-x64" ].
+.set.signing_key."keys/release.pem".
+
+.set.release.map.new.
+
+<<< ===================== Logging ===================== >>>
+
+.fn.log.msg.
+  .call.io.print."[release] ".$msg.
+.end.
+
+<<< ===================== Load Package ===================== >>>
+
+.fn.load.pkg.
+  .set.raw.call.fs.read.$pkg_file.
+  .set.pkg.call.parser.ucl.$raw.
+.end.
+
+<<< ===================== Version ===================== >>>
+
+.fn.version.bump.type.
+  .set.v.$pkg.version.
+
+  .if $type == "patch" {
+    .ret.call.semver.bump_patch.$v.
+  }.
+  .if $type == "minor" {
+    .ret.call.semver.bump_minor.$v.
+  }.
+  .if $type == "major" {
+    .ret.call.semver.bump_major.$v.
+  }.
+.end.
+
+<<< ===================== Changelog ===================== >>>
+
+.fn.changelog.generate.
+  .call.log."generate changelog".
+
+  .set.log.call.process.exec_capture."git log --oneline -n 50".
+  .set.out.call.str.concat."# Changelog\n\n".$log.
+
+  .call.fs.write."CHANGELOG.md".$out.
+.end.
+
+<<< ===================== Build ===================== >>>
+
+.fn.build.target.t.
+  .call.log.(str.concat."build " $t).
+
+  .set.cmd.call.str.concat
+    "dots build.dotS --target=" $t.
+
+  .call.process.exec.$cmd.
+.end.
+
+.fn.build.all.
+  .each.t.$targets.
+    .call.build.target.$t.
+  .end.
+.end.
+
+<<< ===================== Artifact ===================== >>>
+
+.fn.package.target.t.
+  .set.archive.call.str.concat
+    $dist_dir "/app-" $t ".tar.gz".
+
+  .call.process.exec
+    (str.concat."tar -czf " $archive " bin/").
+
+  .ret.$archive.
+.end.
+
+<<< ===================== Signing ===================== >>>
+
+.fn.sign.file.path.
+  .call.log."sign ".$path.
+
+  .set.sig.call.crypto.sign.$path.$signing_key.
+
+  .call.fs.write.(str.concat.$path.".sig").$sig.
+.end.
+
+<<< ===================== Verify ===================== >>>
+
+.fn.verify.file.path.
+  .set.sig.call.fs.read.(str.concat.$path.".sig").
+  .set.ok.call.crypto.verify.$path.$sig.$signing_key.
+
+  .if !$ok {
+    .call.log."signature invalid".
+    .call.sys.exit.1.
+  }.
+.end.
+
+<<< ===================== Publish ===================== >>>
+
+.fn.publish.registry.file.
+  .call.log."upload ".$file.
+  .call.net.upload.(str.concat.$registry_url."/upload").$file.
+.end.
+
+.fn.publish.git.tag.version.
+  .call.process.exec.(str.concat."git tag v" $version).
+  .call.process.exec."git push --tags".
+.end.
+
+<<< ===================== Release Flow ===================== >>>
+
+.fn.release.run.type.
+
+  <<< load >>>
+  .call.load.pkg.
+
+  <<< bump version >>>
+  .set.new_version.call.version.bump.$type.
+  .call.log.(str.concat."version " $new_version).
+
+  <<< changelog >>>
+  .call.changelog.generate.
+
+  <<< build >>>
+  .call.build.all.
+
+  <<< package + sign + publish >>>
+  .each.t.$targets.
+
+    .set.pkg.call.package.target.$t.
+
+    .call.sign.file.$pkg.
+    .call.verify.file.$pkg.
+
+    .call.publish.registry.$pkg.
+
+  .end.
+
+  <<< git release >>>
+  .call.publish.git.tag.$new_version.
+
+  <<< save release meta >>>
+  .set.release.version.$new_version.
+  .set.release.time.call.time.now.
+  .call.fs.write
+    (str.concat.$release_dir."/release-" $new_version ".json")
+    (call.json.encode.$release).
+
+.end.
+
+<<< ===================== Rollback ===================== >>>
+
+.fn.rollback.version.v.
+  .call.log.(str.concat."rollback to " $v).
+
+  .call.process.exec.(str.concat."git checkout v" $v).
+  .call.process.exec."dots build.dotS".
+
+  .call.log."rollback done".
+.end.
+
+<<< ===================== CI ===================== >>>
+
+.fn.ci.release.
+  .call.release.run."patch".
+.end.
+
+<<< ===================== Entry ===================== >>>
+
+.fn.main.
+  .set.cmd.call.sys.argv.1.
+
+  .if $cmd == "patch" { .call.release.run."patch". }.
+  .if $cmd == "minor" { .call.release.run."minor". }.
+  .if $cmd == "major" { .call.release.run."major". }.
+  .if $cmd == "rollback" {
+    .set.v.call.sys.argv.2.
+    .call.rollback.version.$v.
+  }.
+.end.
+
+.entry.main.
