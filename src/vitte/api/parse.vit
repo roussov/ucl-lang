@@ -1,217 +1,900 @@
 space vitte/api/parse
 
 <<< =========================================================
-   Tokens
-========================================================= >>>
+   UCL Parser API — MAX
+   source: src/vitte/api/parse.vit
+   lexer + Pratt parser + AST + diagnostics
+   ========================================================= >>>
 
-pick Token {
-    Int(v: i64),
-    Ident(name: string),
-    Plus, Minus, Star, Slash,
-    LParen, RParen,
-    EOF
+<<< ================= Tokens ================= >>>
+
+pick TokenKind {
+  Int,
+  Float,
+  String,
+  Bool,
+  Null,
+  Ident,
+
+  Plus,
+  Minus,
+  Star,
+  Slash,
+  Percent,
+
+  Eq,
+  EqEq,
+  Bang,
+  BangEq,
+  Lt,
+  Le,
+  Gt,
+  Ge,
+
+  AndAnd,
+  OrOr,
+
+  Dot,
+  Comma,
+  Colon,
+  Semicolon,
+  Arrow,
+
+  LParen,
+  RParen,
+  LBrace,
+  RBrace,
+  LBracket,
+  RBracket,
+
+  Let,
+  Set,
+  Fn,
+  If,
+  Else,
+  While,
+  Return,
+  Break,
+  Continue,
+
+  EOF,
+  Error
 }
 
-<<< =========================================================
-   Lexer (minimal)
-========================================================= >>>
+form Token {
+  kind: TokenKind,
+  text: string,
+  line: i64,
+  column: i64,
+  int_value: i64,
+  float_value: f64
+}
+
+proc token(kind: TokenKind, text: string, line: i64, column: i64) -> Token {
+  give Token {
+    kind: kind,
+    text: text,
+    line: line,
+    column: column,
+    int_value: 0,
+    float_value: 0.0
+  }
+}
+
+proc token_int(text: string, value: i64, line: i64, column: i64) -> Token {
+  give Token {
+    kind: TokenKind.Int,
+    text: text,
+    line: line,
+    column: column,
+    int_value: value,
+    float_value: 0.0
+  }
+}
+
+proc token_float(text: string, value: f64, line: i64, column: i64) -> Token {
+  give Token {
+    kind: TokenKind.Float,
+    text: text,
+    line: line,
+    column: column,
+    int_value: 0,
+    float_value: value
+  }
+}
+
+<<< ================= Diagnostics ================= >>>
+
+pick ParseLevel {
+  Error,
+  Warning,
+  Note
+}
+
+form ParseDiagnostic {
+  level: ParseLevel,
+  code: string,
+  message: string,
+  line: i64,
+  column: i64
+}
+
+form ParseDiagnostics {
+  items: [ParseDiagnostic]
+}
+
+proc diagnostics_new() -> ParseDiagnostics {
+  give ParseDiagnostics { items: [] }
+}
+
+proc diag_error(code: string, message: string, line: i64, column: i64) -> ParseDiagnostic {
+  give ParseDiagnostic {
+    level: ParseLevel.Error,
+    code: code,
+    message: message,
+    line: line,
+    column: column
+  }
+}
+
+proc push_diag(diags: &mut ParseDiagnostics, diag: ParseDiagnostic) {
+  set diags.items = diags.items + [diag]
+}
+
+proc has_errors(diags: ParseDiagnostics) -> bool {
+  for item in diags.items {
+    if item.level == ParseLevel.Error {
+      give true
+    }
+  }
+
+  give false
+}
+
+<<< ================= Lexer ================= >>>
 
 form Lexer {
-    input: string,
-    pos: i64
+  input: string,
+  pos: i64,
+  line: i64,
+  column: i64,
+  diagnostics: ParseDiagnostics
 }
 
 proc lexer_new(input: string) -> Lexer {
-    give Lexer { input: input, pos: 0 }
+  give Lexer {
+    input: input,
+    pos: 0,
+    line: 1,
+    column: 1,
+    diagnostics: diagnostics_new()
+  }
 }
 
-proc is_digit(c: string) -> bool {
-    give c >= "0" and c <= "9"
-}
-
-proc is_alpha(c: string) -> bool {
-    give (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "_"
+proc lexer_eof(l: *Lexer) -> bool {
+  give l.pos >= l.input.len
 }
 
 proc peek(l: *Lexer) -> string {
-    give l.input[l.pos]
+  if lexer_eof(l) {
+    give "\0"
+  }
+
+  give l.input[l.pos]
 }
 
-proc advance(l: *Lexer) {
-    l.pos = l.pos + 1
+proc peek_next(l: *Lexer) -> string {
+  if l.pos + 1 >= l.input.len {
+    give "\0"
+  }
+
+  give l.input[l.pos + 1]
+}
+
+proc advance(l: *Lexer) -> string {
+  let c: string = peek(l)
+
+  set l.pos = l.pos + 1
+
+  if c == "\n" {
+    set l.line = l.line + 1
+    set l.column = 1
+  } else {
+    set l.column = l.column + 1
+  }
+
+  give c
+}
+
+proc is_space(c: string) -> bool {
+  give c == " " or c == "\t" or c == "\r" or c == "\n"
+}
+
+proc is_digit(c: string) -> bool {
+  give c >= "0" and c <= "9"
+}
+
+proc is_alpha(c: string) -> bool {
+  give (c >= "a" and c <= "z") or
+       (c >= "A" and c <= "Z") or
+       c == "_"
+}
+
+proc is_alnum(c: string) -> bool {
+  give is_alpha(c) or is_digit(c)
+}
+
+proc skip_ws_and_comments(l: *Lexer) {
+  loop while true {
+    let c: string = peek(l)
+
+    if is_space(c) {
+      advance(l)
+      continue
+    }
+
+    if c == "#" {
+      loop while not lexer_eof(l) and peek(l) != "\n" {
+        advance(l)
+      }
+      continue
+    }
+
+    if c == "/" and peek_next(l) == "/" {
+      loop while not lexer_eof(l) and peek(l) != "\n" {
+        advance(l)
+      }
+      continue
+    }
+
+    break
+  }
+}
+
+proc keyword_or_ident(text: string, line: i64, column: i64) -> Token {
+  if text == "let" { give token(TokenKind.Let, text, line, column) }
+  if text == "set" { give token(TokenKind.Set, text, line, column) }
+  if text == "fn" { give token(TokenKind.Fn, text, line, column) }
+  if text == "if" { give token(TokenKind.If, text, line, column) }
+  if text == "else" { give token(TokenKind.Else, text, line, column) }
+  if text == "while" { give token(TokenKind.While, text, line, column) }
+  if text == "return" { give token(TokenKind.Return, text, line, column) }
+  if text == "break" { give token(TokenKind.Break, text, line, column) }
+  if text == "continue" { give token(TokenKind.Continue, text, line, column) }
+
+  if text == "true" {
+    give token(TokenKind.Bool, text, line, column)
+  }
+
+  if text == "false" {
+    give token(TokenKind.Bool, text, line, column)
+  }
+
+  if text == "null" {
+    give token(TokenKind.Null, text, line, column)
+  }
+
+  give token(TokenKind.Ident, text, line, column)
+}
+
+proc scan_number(l: *Lexer) -> Token {
+  let start: i64 = l.pos
+  let line: i64 = l.line
+  let column: i64 = l.column
+  let mut is_float_value: bool = false
+
+  loop while is_digit(peek(l)) {
+    advance(l)
+  }
+
+  if peek(l) == "." and is_digit(peek_next(l)) {
+    set is_float_value = true
+    advance(l)
+
+    loop while is_digit(peek(l)) {
+      advance(l)
+    }
+  }
+
+  let txt: string = l.input[start:l.pos]
+
+  if is_float_value {
+    give token_float(txt, parse_float(txt), line, column)
+  }
+
+  give token_int(txt, parse_int(txt), line, column)
+}
+
+proc scan_ident(l: *Lexer) -> Token {
+  let start: i64 = l.pos
+  let line: i64 = l.line
+  let column: i64 = l.column
+
+  loop while is_alnum(peek(l)) {
+    advance(l)
+  }
+
+  let txt: string = l.input[start:l.pos]
+  give keyword_or_ident(txt, line, column)
+}
+
+proc scan_string(l: *Lexer) -> Token {
+  let line: i64 = l.line
+  let column: i64 = l.column
+
+  advance(l)
+
+  let mut out: string = ""
+
+  loop while not lexer_eof(l) and peek(l) != "\"" {
+    if peek(l) == "\\" {
+      advance(l)
+
+      let esc: string = advance(l)
+
+      if esc == "n" {
+        set out = out + "\n"
+      } elif esc == "t" {
+        set out = out + "\t"
+      } elif esc == "r" {
+        set out = out + "\r"
+      } else {
+        set out = out + esc
+      }
+
+      continue
+    }
+
+    set out = out + advance(l)
+  }
+
+  if lexer_eof(l) {
+    push_diag(&mut l.diagnostics, diag_error("PARSE001", "unterminated string", line, column))
+    give token(TokenKind.Error, out, line, column)
+  }
+
+  advance(l)
+
+  give token(TokenKind.String, out, line, column)
 }
 
 proc next_token(l: *Lexer) -> Token {
+  skip_ws_and_comments(l)
 
-    let c = peek(l)
+  let line: i64 = l.line
+  let column: i64 = l.column
+  let c: string = peek(l)
 
-    if c == "+" { advance(l); give Token.Plus }
-    if c == "-" { advance(l); give Token.Minus }
-    if c == "*" { advance(l); give Token.Star }
-    if c == "/" { advance(l); give Token.Slash }
-    if c == "(" { advance(l); give Token.LParen }
-    if c == ")" { advance(l); give Token.RParen }
+  if lexer_eof(l) {
+    give token(TokenKind.EOF, "", line, column)
+  }
 
-    if is_digit(c) {
-        let start = l.pos
-        loop while is_digit(peek(l)) {
-            advance(l)
-        }
-        let txt = l.input[start:l.pos]
-        give Token.Int(v: parse_int(txt))
+  if is_digit(c) {
+    give scan_number(l)
+  }
+
+  if is_alpha(c) {
+    give scan_ident(l)
+  }
+
+  if c == "\"" {
+    give scan_string(l)
+  }
+
+  if c == "+" { advance(l); give token(TokenKind.Plus, "+", line, column) }
+  if c == "-" {
+    advance(l)
+    if peek(l) == ">" {
+      advance(l)
+      give token(TokenKind.Arrow, "->", line, column)
     }
+    give token(TokenKind.Minus, "-", line, column)
+  }
 
-    if is_alpha(c) {
-        let start = l.pos
-        loop while is_alpha(peek(l)) {
-            advance(l)
-        }
-        let txt = l.input[start:l.pos]
-        give Token.Ident(name: txt)
+  if c == "*" { advance(l); give token(TokenKind.Star, "*", line, column) }
+  if c == "/" { advance(l); give token(TokenKind.Slash, "/", line, column) }
+  if c == "%" { advance(l); give token(TokenKind.Percent, "%", line, column) }
+
+  if c == "=" {
+    advance(l)
+    if peek(l) == "=" {
+      advance(l)
+      give token(TokenKind.EqEq, "==", line, column)
     }
+    give token(TokenKind.Eq, "=", line, column)
+  }
 
-    give Token.EOF
+  if c == "!" {
+    advance(l)
+    if peek(l) == "=" {
+      advance(l)
+      give token(TokenKind.BangEq, "!=", line, column)
+    }
+    give token(TokenKind.Bang, "!", line, column)
+  }
+
+  if c == "<" {
+    advance(l)
+    if peek(l) == "=" {
+      advance(l)
+      give token(TokenKind.Le, "<=", line, column)
+    }
+    give token(TokenKind.Lt, "<", line, column)
+  }
+
+  if c == ">" {
+    advance(l)
+    if peek(l) == "=" {
+      advance(l)
+      give token(TokenKind.Ge, ">=", line, column)
+    }
+    give token(TokenKind.Gt, ">", line, column)
+  }
+
+  if c == "&" and peek_next(l) == "&" {
+    advance(l)
+    advance(l)
+    give token(TokenKind.AndAnd, "&&", line, column)
+  }
+
+  if c == "|" and peek_next(l) == "|" {
+    advance(l)
+    advance(l)
+    give token(TokenKind.OrOr, "||", line, column)
+  }
+
+  if c == "." { advance(l); give token(TokenKind.Dot, ".", line, column) }
+  if c == "," { advance(l); give token(TokenKind.Comma, ",", line, column) }
+  if c == ":" { advance(l); give token(TokenKind.Colon, ":", line, column) }
+  if c == ";" { advance(l); give token(TokenKind.Semicolon, ";", line, column) }
+
+  if c == "(" { advance(l); give token(TokenKind.LParen, "(", line, column) }
+  if c == ")" { advance(l); give token(TokenKind.RParen, ")", line, column) }
+  if c == "{" { advance(l); give token(TokenKind.LBrace, "{", line, column) }
+  if c == "}" { advance(l); give token(TokenKind.RBrace, "}", line, column) }
+  if c == "[" { advance(l); give token(TokenKind.LBracket, "[", line, column) }
+  if c == "]" { advance(l); give token(TokenKind.RBracket, "]", line, column) }
+
+  advance(l)
+  push_diag(&mut l.diagnostics, diag_error("PARSE002", "unexpected character: " + c, line, column))
+  give token(TokenKind.Error, c, line, column)
 }
 
-<<< =========================================================
-   AST (minimal)
-========================================================= >>>
+proc lex_all(input: string) -> [Token] {
+  let lexer: Lexer = lexer_new(input)
+  let mut tokens: [Token] = []
+
+  loop while true {
+    let t: Token = next_token(&lexer)
+    set tokens = tokens + [t]
+
+    if t.kind == TokenKind.EOF {
+      break
+    }
+  }
+
+  give tokens
+}
+
+<<< ================= AST ================= >>>
 
 pick Expr {
-    Int(v: i64),
-    Ident(name: string),
-    Binary(op: BinOp, left: Expr, right: Expr)
+  Null,
+  Int(v: i64),
+  Float(v: f64),
+  Bool(v: bool),
+  String(v: string),
+  Ident(name: string),
+  List(items: [Expr]),
+  Object(fields: [ObjectField]),
+  Unary(op: UnaryOp, expr: Expr),
+  Binary(op: BinOp, left: Expr, right: Expr),
+  Call(target: Expr, args: [Expr]),
+  Member(target: Expr, name: string),
+  Index(target: Expr, index: Expr),
+  BlockExpr(block: Block)
+}
+
+form ObjectField {
+  name: string,
+  expr: Expr
+}
+
+pick UnaryOp {
+  Neg,
+  Not
 }
 
 pick BinOp {
-    Add, Sub, Mul, Div
+  Add,
+  Sub,
+  Mul,
+  Div,
+  Mod,
+  Eq,
+  Ne,
+  Lt,
+  Le,
+  Gt,
+  Ge,
+  And,
+  Or
 }
 
-<<< =========================================================
-   Parser
-========================================================= >>>
+pick Stmt {
+  Let(name: string, expr: Expr),
+  Set(name: string, expr: Expr),
+  Expr(expr: Expr),
+  Return(expr: Expr),
+  Break,
+  Continue,
+  Block(block: Block)
+}
+
+form Block {
+  stmts: [Stmt]
+}
+
+<<< ================= Parser ================= >>>
 
 form Parser {
-    lexer: Lexer,
-    current: Token
+  lexer: Lexer,
+  current: Token,
+  previous: Token,
+  diagnostics: ParseDiagnostics
+}
+
+form ParseResult {
+  expr: Expr,
+  block: Block,
+  diagnostics: ParseDiagnostics,
+  success: bool
 }
 
 proc parser_new(input: string) -> Parser {
-    let lex = lexer_new(input)
-    let first = next_token(&lex)
-    give Parser { lexer: lex, current: first }
+  let lex: Lexer = lexer_new(input)
+  let first: Token = next_token(&lex)
+
+  give Parser {
+    lexer: lex,
+    current: first,
+    previous: first,
+    diagnostics: lex.diagnostics
+  }
+}
+
+proc parser_error(p: *Parser, code: string, message: string) {
+  push_diag(&mut p.diagnostics, diag_error(code, message, p.current.line, p.current.column))
 }
 
 proc eat(p: *Parser) {
-    p.current = next_token(&p.lexer)
+  set p.previous = p.current
+  set p.current = next_token(&p.lexer)
+  set p.diagnostics = p.lexer.diagnostics
 }
 
-<<< -------------------------
-   Primary
--------------------------- >>>
+proc check(p: *Parser, kind: TokenKind) -> bool {
+  give p.current.kind == kind
+}
+
+proc match_token(p: *Parser, kind: TokenKind) -> bool {
+  if check(p, kind) {
+    eat(p)
+    give true
+  }
+
+  give false
+}
+
+proc expect(p: *Parser, kind: TokenKind, message: string) -> bool {
+  if check(p, kind) {
+    eat(p)
+    give true
+  }
+
+  parser_error(p, "PARSE100", message)
+  give false
+}
+
+proc precedence(kind: TokenKind) -> i64 {
+  if kind == TokenKind.OrOr { give 1 }
+  if kind == TokenKind.AndAnd { give 2 }
+  if kind == TokenKind.EqEq or kind == TokenKind.BangEq { give 3 }
+  if kind == TokenKind.Lt or kind == TokenKind.Le or kind == TokenKind.Gt or kind == TokenKind.Ge { give 4 }
+  if kind == TokenKind.Plus or kind == TokenKind.Minus { give 5 }
+  if kind == TokenKind.Star or kind == TokenKind.Slash or kind == TokenKind.Percent { give 6 }
+
+  give 0
+}
+
+proc binop_from_token(kind: TokenKind) -> BinOp {
+  if kind == TokenKind.Plus { give BinOp.Add }
+  if kind == TokenKind.Minus { give BinOp.Sub }
+  if kind == TokenKind.Star { give BinOp.Mul }
+  if kind == TokenKind.Slash { give BinOp.Div }
+  if kind == TokenKind.Percent { give BinOp.Mod }
+  if kind == TokenKind.EqEq { give BinOp.Eq }
+  if kind == TokenKind.BangEq { give BinOp.Ne }
+  if kind == TokenKind.Lt { give BinOp.Lt }
+  if kind == TokenKind.Le { give BinOp.Le }
+  if kind == TokenKind.Gt { give BinOp.Gt }
+  if kind == TokenKind.Ge { give BinOp.Ge }
+  if kind == TokenKind.AndAnd { give BinOp.And }
+  give BinOp.Or
+}
 
 proc parse_primary(p: *Parser) -> Expr {
-
-    match p.current {
-
-        case Token.Int(v) {
-            eat(p)
-            give Expr.Int(v: v)
-        }
-
-        case Token.Ident(name) {
-            eat(p)
-            give Expr.Ident(name: name)
-        }
-
-        case Token.LParen {
-            eat(p)
-            let e = parse_expr(p)
-            eat(p) <<< RParen >>
-            give e
-        }
-
-        else {
-            give Expr.Int(v: 0)
-        }
-    }
-}
-
-<<< -------------------------
-   Multiplicative
--------------------------- >>>
-
-proc parse_mul(p: *Parser) -> Expr {
-
-    let left = parse_primary(p)
-
-    loop while true {
-
-        match p.current {
-
-            case Token.Star {
-                eat(p)
-                let right = parse_primary(p)
-                left = Expr.Binary(op: BinOp.Mul, left: left, right: right)
-            }
-
-            case Token.Slash {
-                eat(p)
-                let right = parse_primary(p)
-                left = Expr.Binary(op: BinOp.Div, left: left, right: right)
-            }
-
-            else {
-                break
-            }
-        }
+  match p.current.kind {
+    case TokenKind.Int {
+      let v: i64 = p.current.int_value
+      eat(p)
+      give Expr.Int(v: v)
     }
 
-    give left
+    case TokenKind.Float {
+      let v: f64 = p.current.float_value
+      eat(p)
+      give Expr.Float(v: v)
+    }
+
+    case TokenKind.String {
+      let v: string = p.current.text
+      eat(p)
+      give Expr.String(v: v)
+    }
+
+    case TokenKind.Bool {
+      let v: bool = p.current.text == "true"
+      eat(p)
+      give Expr.Bool(v: v)
+    }
+
+    case TokenKind.Null {
+      eat(p)
+      give Expr.Null
+    }
+
+    case TokenKind.Ident {
+      let name: string = p.current.text
+      eat(p)
+      give Expr.Ident(name: name)
+    }
+
+    case TokenKind.Minus {
+      eat(p)
+      give Expr.Unary(op: UnaryOp.Neg, expr: parse_primary(p))
+    }
+
+    case TokenKind.Bang {
+      eat(p)
+      give Expr.Unary(op: UnaryOp.Not, expr: parse_primary(p))
+    }
+
+    case TokenKind.LParen {
+      eat(p)
+      let e: Expr = parse_expr(p)
+      expect(p, TokenKind.RParen, "expected ')'")
+      give e
+    }
+
+    case TokenKind.LBracket {
+      give parse_list(p)
+    }
+
+    case TokenKind.LBrace {
+      give Expr.BlockExpr(block: parse_block(p))
+    }
+
+    else {
+      parser_error(p, "PARSE101", "expected expression")
+      eat(p)
+      give Expr.Int(v: 0)
+    }
+  }
 }
 
-<<< -------------------------
-   Additive
--------------------------- >>>
+proc parse_list(p: *Parser) -> Expr {
+  expect(p, TokenKind.LBracket, "expected '['")
+
+  let mut items: [Expr] = []
+
+  loop while not check(p, TokenKind.RBracket) and not check(p, TokenKind.EOF) {
+    set items = items + [parse_expr(p)]
+
+    if not match_token(p, TokenKind.Comma) {
+      break
+    }
+  }
+
+  expect(p, TokenKind.RBracket, "expected ']'")
+
+  give Expr.List(items: items)
+}
+
+proc parse_call_args(p: *Parser) -> [Expr] {
+  let mut args: [Expr] = []
+
+  expect(p, TokenKind.LParen, "expected '('")
+
+  loop while not check(p, TokenKind.RParen) and not check(p, TokenKind.EOF) {
+    set args = args + [parse_expr(p)]
+
+    if not match_token(p, TokenKind.Comma) {
+      break
+    }
+  }
+
+  expect(p, TokenKind.RParen, "expected ')'")
+
+  give args
+}
+
+proc parse_postfix(p: *Parser) -> Expr {
+  let mut expr: Expr = parse_primary(p)
+
+  loop while true {
+    if check(p, TokenKind.LParen) {
+      let args: [Expr] = parse_call_args(p)
+      set expr = Expr.Call(target: expr, args: args)
+      continue
+    }
+
+    if match_token(p, TokenKind.Dot) {
+      if check(p, TokenKind.Ident) {
+        let name: string = p.current.text
+        eat(p)
+        set expr = Expr.Member(target: expr, name: name)
+        continue
+      }
+
+      parser_error(p, "PARSE102", "expected member name")
+      continue
+    }
+
+    if match_token(p, TokenKind.LBracket) {
+      let idx: Expr = parse_expr(p)
+      expect(p, TokenKind.RBracket, "expected ']'")
+      set expr = Expr.Index(target: expr, index: idx)
+      continue
+    }
+
+    break
+  }
+
+  give expr
+}
+
+proc parse_precedence(p: *Parser, min_prec: i64) -> Expr {
+  let mut left: Expr = parse_postfix(p)
+
+  loop while true {
+    let prec: i64 = precedence(p.current.kind)
+
+    if prec < min_prec or prec == 0 {
+      break
+    }
+
+    let op_kind: TokenKind = p.current.kind
+    eat(p)
+
+    let right: Expr = parse_precedence(p, prec + 1)
+
+    set left = Expr.Binary(
+      op: binop_from_token(op_kind),
+      left: left,
+      right: right
+    )
+  }
+
+  give left
+}
 
 proc parse_expr(p: *Parser) -> Expr {
-
-    let left = parse_mul(p)
-
-    loop while true {
-
-        match p.current {
-
-            case Token.Plus {
-                eat(p)
-                let right = parse_mul(p)
-                left = Expr.Binary(op: BinOp.Add, left: left, right: right)
-            }
-
-            case Token.Minus {
-                eat(p)
-                let right = parse_mul(p)
-                left = Expr.Binary(op: BinOp.Sub, left: left, right: right)
-            }
-
-            else {
-                break
-            }
-        }
-    }
-
-    give left
+  give parse_precedence(p, 1)
 }
 
-<<< =========================================================
-   Entry test
-========================================================= >>>
+proc parse_stmt(p: *Parser) -> Stmt {
+  if match_token(p, TokenKind.Let) {
+    let name: string = p.current.text
+    expect(p, TokenKind.Ident, "expected binding name")
+    expect(p, TokenKind.Eq, "expected '='")
+    let expr: Expr = parse_expr(p)
+    match_token(p, TokenKind.Semicolon)
+    give Stmt.Let(name: name, expr: expr)
+  }
+
+  if match_token(p, TokenKind.Set) {
+    let name: string = p.current.text
+    expect(p, TokenKind.Ident, "expected binding name")
+    expect(p, TokenKind.Eq, "expected '='")
+    let expr: Expr = parse_expr(p)
+    match_token(p, TokenKind.Semicolon)
+    give Stmt.Set(name: name, expr: expr)
+  }
+
+  if match_token(p, TokenKind.Return) {
+    let expr: Expr = parse_expr(p)
+    match_token(p, TokenKind.Semicolon)
+    give Stmt.Return(expr: expr)
+  }
+
+  if match_token(p, TokenKind.Break) {
+    match_token(p, TokenKind.Semicolon)
+    give Stmt.Break
+  }
+
+  if match_token(p, TokenKind.Continue) {
+    match_token(p, TokenKind.Semicolon)
+    give Stmt.Continue
+  }
+
+  if check(p, TokenKind.LBrace) {
+    give Stmt.Block(block: parse_block(p))
+  }
+
+  let expr: Expr = parse_expr(p)
+  match_token(p, TokenKind.Semicolon)
+
+  give Stmt.Expr(expr: expr)
+}
+
+proc parse_block(p: *Parser) -> Block {
+  expect(p, TokenKind.LBrace, "expected '{'")
+
+  let mut stmts: [Stmt] = []
+
+  loop while not check(p, TokenKind.RBrace) and not check(p, TokenKind.EOF) {
+    set stmts = stmts + [parse_stmt(p)]
+  }
+
+  expect(p, TokenKind.RBrace, "expected '}'")
+
+  give Block { stmts: stmts }
+}
+
+proc parse_program(p: *Parser) -> Block {
+  let mut stmts: [Stmt] = []
+
+  loop while not check(p, TokenKind.EOF) {
+    set stmts = stmts + [parse_stmt(p)]
+  }
+
+  give Block { stmts: stmts }
+}
+
+proc parse(input: string) -> Expr {
+  let p: Parser = parser_new(input)
+  give parse_expr(&p)
+}
+
+proc parse_checked(input: string) -> ParseResult {
+  let p: Parser = parser_new(input)
+  let expr: Expr = parse_expr(&p)
+
+  give ParseResult {
+    expr: expr,
+    block: Block { stmts: [] },
+    diagnostics: p.diagnostics,
+    success: not has_errors(p.diagnostics)
+  }
+}
+
+proc parse_program_checked(input: string) -> ParseResult {
+  let p: Parser = parser_new(input)
+  let block: Block = parse_program(&p)
+
+  give ParseResult {
+    expr: Expr.Null,
+    block: block,
+    diagnostics: p.diagnostics,
+    success: not has_errors(p.diagnostics)
+  }
+}
 
 entry test at vitte/api/parse {
-
-    let p = parser_new("2+3*4")
-
-    let ast = parse_expr(&p)
-
-    emit ast
+  let p: Parser = parser_new("let x = 2 + 3 * 4; x")
+  let block: Block = parse_program(&p)
+  emit block
 }
+
+export *
