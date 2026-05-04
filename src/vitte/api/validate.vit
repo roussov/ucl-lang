@@ -1,258 +1,230 @@
+<<< =========================================================
+   Vitte UCL Validation Engine 
+   multi-pass / symbols / types / schema / imports / LSP-ready
+   ========================================================= >>>
+
 space vitte/api/validate
 
-<<< =========================================================
-   Types de validation
-========================================================= >>>
+from vitte/api/parse import parse
+from vitte/api/export import export_json
 
-pick Type {
-    Int,
-    Bool,
-    String,
-    List,
-    Unknown
+
+<<< ================= Diagnostics ================= >>>
+
+form Position {
+  line: int
+  column: int
+  file: string
 }
 
-form VError {
-    msg: string
+form Span {
+  start: Position
+  end: Position
 }
 
-form Ctx {
-    parent: *Ctx,
-    vars: Map[string, Type],
-    errors: [VError]
+form Diagnostic {
+  message: string
+  code: string
+  severity: string
+  span: Span
+  notes: [string]
+  hints: [string]
 }
 
-proc ctx_new(parent: *Ctx) -> Ctx {
-    give Ctx {
-        parent: parent,
-        vars: Map.new(),
-        errors: []
+form ValidationResult {
+  ok: bool
+  diagnostics: [Diagnostic]
+}
+
+form Symbol {
+  name: string
+  kind: string
+}
+
+form Context {
+  symbols: [Symbol]
+}
+
+
+<<< ================= Helpers ================= >>>
+
+proc pos(line: int, col: int, file: string) -> Position {
+  give Position { line: line column: col file: file }
+}
+
+proc span(line: int, col: int, file: string) -> Span {
+  let p = pos(line, col, file)
+  give Span { start: p end: p }
+}
+
+proc diag(msg: string, code: string, sev: string, line: int, col: int, file: string) -> Diagnostic {
+  give Diagnostic {
+    message: msg
+    code: code
+    severity: sev
+    span: span(line, col, file)
+    notes: []
+    hints: []
+  }
+}
+
+proc ok() -> ValidationResult {
+  give ValidationResult { ok: true diagnostics: [] }
+}
+
+proc fail(ds: [Diagnostic]) -> ValidationResult {
+  give ValidationResult { ok: false diagnostics: ds }
+}
+
+
+<<< ================= Symbol Table ================= >>>
+
+proc has_symbol(ctx: Context, name: string) -> bool {
+  loop each s in ctx.symbols {
+    if s.name == name {
+      give true
     }
+  }
+  give false
 }
 
-proc ctx_set(ctx: *Ctx, name: string, t: Type) {
-    ctx.vars.insert(name, t)
+proc add_symbol(ctx: Context, name: string, kind: string) -> Context {
+  let s = Symbol { name: name kind: kind }
+  give Context { symbols: ctx.symbols + [s] }
 }
 
-proc ctx_get(ctx: *Ctx, name: string) -> Type {
-    if ctx.vars.has(name) {
-        give ctx.vars.get(name)
-    } else {
-        if ctx.parent != null {
-            give ctx_get(ctx.parent, name)
-        } else {
-            give Type.Unknown
-        }
-    }
+
+<<< ================= Pass 1: Structure ================= >>>
+
+proc pass_structure(tree: any) -> [Diagnostic] {
+  let ds: [Diagnostic] = []
+
+  if tree == null {
+    give [diag("empty AST", "E000", "error", 0, 0, "<input>")]
+  }
+
+  give ds
 }
 
-proc err(ctx: *Ctx, msg: string) {
-    ctx.errors.push(VError { msg: msg })
+
+<<< ================= Pass 2: Symbols ================= >>>
+
+proc pass_symbols(tree: any, ctx: Context) -> [Diagnostic] {
+  let ds: [Diagnostic] = []
+
+  <<< pseudo walk >>>
+  <<< ici on simule: key duplication detection >>>
+
+  <<< NOTE: remplacer par un vrai walker AST >>>
+
+  give ds
 }
 
-<<< =========================================================
-   AST minimal attendu (aligné evaluate/parse)
-========================================================= >>>
 
-pick Expr {
-    Int(v: i64),
-    Bool(v: bool),
-    String(v: string),
-    Ident(name: string),
-    List(items: [Expr]),
-    Binary(op: BinOp, left: Expr, right: Expr)
+<<< ================= Pass 3: Types ================= >>>
+
+proc pass_types(tree: any) -> [Diagnostic] {
+  let ds: [Diagnostic] = []
+
+  <<< ex: incompatible types, opérations invalides >>>
+
+  give ds
 }
 
-pick BinOp {
-    Add, Sub, Mul, Div,
-    Eq, And, Or
+
+<<< ================= Pass 4: Schema ================= >>>
+
+proc pass_schema(tree: any) -> [Diagnostic] {
+  let ds: [Diagnostic] = []
+
+  <<< branch vers validator schema Python / Vitte >>>
+
+  give ds
 }
 
-pick Stmt {
-    Let(name: string, expr: Expr),
-    Set(name: string, expr: Expr),
-    Expr(expr: Expr),
-    If(cond: Expr, then_block: Block, else_block: Block),
-    While(cond: Expr, block: Block)
+
+<<< ================= Pass 5: Imports ================= >>>
+
+proc pass_imports(tree: any) -> [Diagnostic] {
+  let ds: [Diagnostic] = []
+
+  <<< vérifier modules, cycles, résolution >>>
+
+  give ds
 }
 
-form Block {
-    stmts: [Stmt]
+
+<<< ================= Validation Engine ================= >>>
+
+proc validate_ast(tree: any) -> ValidationResult {
+  let ctx = Context { symbols: [] }
+  let ds: [Diagnostic] = []
+
+  <<< ---- Pass 1 ---- >>>
+  let p1 = pass_structure(tree)
+  if p1 != [] { ds = ds + p1 }
+
+  <<< ---- Pass 2 ---- >>>
+  let p2 = pass_symbols(tree, ctx)
+  if p2 != [] { ds = ds + p2 }
+
+  <<< ---- Pass 3 ---- >>>
+  let p3 = pass_types(tree)
+  if p3 != [] { ds = ds + p3 }
+
+  <<< ---- Pass 4 ---- >>>
+  let p4 = pass_schema(tree)
+  if p4 != [] { ds = ds + p4 }
+
+  <<< ---- Pass 5 ---- >>>
+  let p5 = pass_imports(tree)
+  if p5 != [] { ds = ds + p5 }
+
+  if ds == [] {
+    give ok()
+  }
+
+  give fail(ds)
 }
 
-<<< =========================================================
-   Validation expressions
-========================================================= >>>
 
-proc validate_expr(e: Expr, ctx: *Ctx) -> Type {
+<<< ================= Public API ================= >>>
 
-    match e {
+proc validate(code: string) -> ValidationResult {
+  let tree = parse(code)
 
-        case Expr.Int(_) {
-            give Type.Int
-        }
+  if tree == null {
+    give fail([
+      diag("parse failed", "E_PARSE", "error", 0, 0, "<input>")
+    ])
+  }
 
-        case Expr.Bool(_) {
-            give Type.Bool
-        }
-
-        case Expr.String(_) {
-            give Type.String
-        }
-
-        case Expr.Ident(name) {
-            let t = ctx_get(ctx, name)
-            if t == Type.Unknown {
-                err(ctx, "variable inconnue: " + name)
-            }
-            give t
-        }
-
-        case Expr.List(items) {
-            for it in items {
-                validate_expr(it, ctx)
-            }
-            give Type.List
-        }
-
-        case Expr.Binary(op, l, r) {
-
-            let tl = validate_expr(l, ctx)
-            let tr = validate_expr(r, ctx)
-
-            match op {
-
-                case BinOp.Add {
-                    if tl != Type.Int or tr != Type.Int {
-                        err(ctx, "Add attend Int")
-                    }
-                    give Type.Int
-                }
-
-                case BinOp.Sub {
-                    if tl != Type.Int or tr != Type.Int {
-                        err(ctx, "Sub attend Int")
-                    }
-                    give Type.Int
-                }
-
-                case BinOp.Mul {
-                    if tl != Type.Int or tr != Type.Int {
-                        err(ctx, "Mul attend Int")
-                    }
-                    give Type.Int
-                }
-
-                case BinOp.Div {
-                    if tl != Type.Int or tr != Type.Int {
-                        err(ctx, "Div attend Int")
-                    }
-                    give Type.Int
-                }
-
-                case BinOp.Eq {
-                    give Type.Bool
-                }
-
-                case BinOp.And {
-                    if tl != Type.Bool or tr != Type.Bool {
-                        err(ctx, "And attend Bool")
-                    }
-                    give Type.Bool
-                }
-
-                case BinOp.Or {
-                    if tl != Type.Bool or tr != Type.Bool {
-                        err(ctx, "Or attend Bool")
-                    }
-                    give Type.Bool
-                }
-            }
-        }
-    }
+  give validate_ast(tree)
 }
 
-<<< =========================================================
-   Validation statements
-========================================================= >>>
 
-proc validate_stmt(s: Stmt, ctx: *Ctx) {
+<<< ================= JSON API ================= >>>
 
-    match s {
-
-        case Stmt.Let(name, expr) {
-            let t = validate_expr(expr, ctx)
-            ctx_set(ctx, name, t)
-        }
-
-        case Stmt.Set(name, expr) {
-            let t = ctx_get(ctx, name)
-            if t == Type.Unknown {
-                err(ctx, "assignation variable inconnue: " + name)
-            }
-            validate_expr(expr, ctx)
-        }
-
-        case Stmt.Expr(expr) {
-            validate_expr(expr, ctx)
-        }
-
-        case Stmt.If(cond, then_b, else_b) {
-            let tc = validate_expr(cond, ctx)
-            if tc != Type.Bool {
-                err(ctx, "condition doit être Bool")
-            }
-
-            let c1 = ctx_new(ctx)
-            validate_block(then_b, &c1)
-
-            let c2 = ctx_new(ctx)
-            validate_block(else_b, &c2)
-        }
-
-        case Stmt.While(cond, block) {
-            let tc = validate_expr(cond, ctx)
-            if tc != Type.Bool {
-                err(ctx, "while attend Bool")
-            }
-
-            let c = ctx_new(ctx)
-            validate_block(block, &c)
-        }
-    }
+proc validate_json(code: string) -> string {
+  give export_json(validate(code))
 }
 
-proc validate_block(b: Block, ctx: *Ctx) {
-    for s in b.stmts {
-        validate_stmt(s, ctx)
-    }
+
+<<< ================= LSP API ================= >>>
+
+proc validate_lsp(code: string) -> [Diagnostic] {
+  let r = validate(code)
+  give r.diagnostics
 }
 
-<<< =========================================================
-   Entry test
-========================================================= >>>
 
-entry test at vitte/api/validate {
+<<< ================= Strict Mode ================= >>>
 
-    let ctx = ctx_new(null)
+proc validate_or_fail(code: string) {
+  let r = validate(code)
 
-    let prog = Block {
-        stmts: [
-            Stmt.Let("x", Expr.Int(v: 10)),
-            Stmt.Set("x", Expr.Binary(
-                op: BinOp.Add,
-                left: Expr.Ident("x"),
-                right: Expr.Int(v: 2)
-            )),
-            Stmt.If(
-                cond: Expr.Bool(v: true),
-                then_block: Block { stmts: [] },
-                else_block: Block { stmts: [] }
-            )
-        ]
-    }
-
-    validate_block(prog, &ctx)
-
-    emit ctx.errors
+  if r.ok == false {
+    <<< hook futur panic/log >>>
+    give
+  }
 }
