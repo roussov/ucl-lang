@@ -1,26 +1,84 @@
 {
-  "schema": 1,
-  "versionSignature": "bin:vitte|unknown",
+  "version": 1,
+  "generated_at": "2026-01-01T00:00:00Z",
   "entries": {
-    "bin:vitte|unknown|en|E1029": {
-      "help": "Keep local declaration names unique within one module.",
-      "at": 1776027884349,
-      "example": "proc ping_alt() -> i32 { return 0 }"
+    "E001": {
+      "title": "Invalid value",
+      "message": "The provided value does not match the expected type or constraints.",
+      "details": [
+        "Check the expected type in the schema.",
+        "Ensure the value respects all constraints."
+      ],
+      "hints": [
+        "Verify numeric ranges.",
+        "Check string format.",
+        "Use schema validation before runtime."
+      ],
+      "severity": "error"
     },
-    "bin:vitte|unknown|en|E0002": {
-      "help": "Provide a value, call, or block expression (e.g., 1, name, call(), { ... }).",
-      "at": 1776027884331,
-      "example": "proc main() -> i32 { return 0 }"
+
+    "E002": {
+      "title": "Missing field",
+      "message": "A required field is missing.",
+      "details": [
+        "The schema requires this field to be present.",
+        "No default value is defined."
+      ],
+      "hints": [
+        "Add the missing field.",
+        "Check schema definition for required fields."
+      ],
+      "severity": "error"
     },
-    "bin:vitte|unknown|en|E0009": {
-      "help": "Add a body with { ... } or mark it #[extern] if it is provided by the runtime.",
-      "at": 1776027787815,
-      "example": "proc add(a: int, b: int) -> int { return a + b }"
+
+    "E003": {
+      "title": "Unexpected field",
+      "message": "A field is not allowed by the schema.",
+      "details": [
+        "The schema does not allow additional properties.",
+        "This key is not defined."
+      ],
+      "hints": [
+        "Remove the field.",
+        "Enable allow_extra in schema if needed."
+      ],
+      "severity": "error"
     },
-    "bin:vitte|unknown|en|E0007": {
-      "help": "Top-level items include space, use, form, pick, type, const, proc, and entry.",
-      "at": 1776027787801,
-      "example": "space my/app\nproc main() -> int { return 0 }"
+
+    "W001": {
+      "title": "Duplicate key",
+      "message": "The same key is defined multiple times.",
+      "details": [
+        "Later definitions override previous ones.",
+        "This may lead to unexpected behavior."
+      ],
+      "hints": [
+        "Remove duplicate entries.",
+        "Check config merging logic."
+      ],
+      "severity": "warning"
+    },
+
+    "W002": {
+      "title": "Unused variable",
+      "message": "A variable is defined but never used.",
+      "details": [
+        "This may indicate dead configuration.",
+        "Could be leftover from refactoring."
+      ],
+      "hints": [
+        "Remove unused variables.",
+        "Verify intended usage."
+      ],
+      "severity": "warning"
+    },
+
+    "I001": {
+      "title": "Information",
+      "message": "General informational message.",
+      "details": [],
+      "hints": [],
+      "severity": "info"
     }
   }
 }
