@@ -1,2 +1,255 @@
-.use sys
-.print "Formatting project"
+<<< =========================================================
+   DotS Formatter Engine 
+   lex / parse / normalize / pretty-print / diff / fix
+   idempotent / configurable / CI-ready / stable
+   ========================================================= >>>
+
+.module.format.
+
+.import.core.fs.
+.import.core.path.
+.import.core.io.
+.import.core.str.
+.import.core.list.
+.import.core.map.
+.import.core.diff.
+.import.core.hash.
+.import.core.json.
+
+<<< ===================== Config ===================== >>>
+
+.set.src_dir.".".
+.set.line_width.100.
+.set.indent_size.2.
+.set.use_tabs.false.
+.set.trailing_commas.true.
+.set.sort_keys.true.
+.set.normalize_numbers.true.
+.set.normalize_strings.true.
+.set.ensure_newline_eof.true.
+
+.set.files.list.new.
+.set.changed.list.new.
+
+<<< ===================== Utils ===================== >>>
+
+.fn.log.msg.
+  .call.io.print."[format] ".$msg.
+.end.
+
+.fn read.path.
+  .ret.call.fs.read.$path.
+.end.
+
+.fn write.path.content.
+  .call.fs.write.$path.$content.
+.end.
+
+<<< ===================== Lexer ===================== >>>
+
+.fn.lex.code.
+  .ret.call.lexer.run.$code.
+.end.
+
+<<< ===================== Parser ===================== >>>
+
+.fn.parse.tokens.
+  .ret.call.parser.run.$tokens.
+.end.
+
+<<< ===================== Normalization ===================== >>>
+
+.fn.norm.number.n.
+  .if $normalize_numbers {
+    .ret.call.str.trim_zeros.$n.
+  } else {
+    .ret.$n.
+  }.
+.end.
+
+.fn.norm.string.s.
+  .if $normalize_strings {
+    .ret.call.str.normalize_quotes.$s.
+  } else {
+    .ret.$s.
+  }.
+.end.
+
+.fn.norm.node.node.
+  <<< normalize recursively >>>
+  .if $node.type == "number" {
+    .set.node.value.call.norm.number.$node.value.
+  }.
+  .if $node.type == "string" {
+    .set.node.value.call.norm.string.$node.value.
+  }.
+  .each.c.$node.children.
+    .call.norm.node.$c.
+  .end.
+  .ret.$node.
+.end.
+
+<<< ===================== Key Sorting ===================== >>>
+
+.fn.sort.map.m.
+  .if !$sort_keys { .ret.$m. }.
+
+  .set.keys.call.map.keys.$m.
+  .set.sorted.call.list.sort.$keys.
+
+  .set.new.map.new.
+  .each.k.$sorted.
+    .call.map.set.$new.$k.(map.get.$m.$k).
+  .end.
+
+  .ret.$new.
+.end.
+
+<<< ===================== Pretty Printer ===================== >>>
+
+.fn indent.level.
+  .if $use_tabs {
+    .ret.call.str.repeat."\t".$level.
+  } else {
+    .ret.call.str.repeat." ".(math.mul.$level.$indent_size).
+  }.
+.end.
+
+.fn pp.node.node.level.
+  .if $node.type == "map" {
+    .set.out."{".
+
+    .set.m.call.sort.map.$node.value.
+
+    .each.kv.$m.
+      .set.line.call.str.concat
+        "\n"
+        (call.indent.(math.add.$level.1))
+        $kv.key
+        " = "
+        (call.pp.node.$kv.value.(math.add.$level.1))
+        (if $trailing_commas { "," } else { "" }).
+
+      .set.out.call.str.concat.$out.$line.
+    .end.
+
+    .set.out.call.str.concat
+      $out
+      "\n"
+      (call.indent.$level)
+      "}".
+
+    .ret.$out.
+  }.
+
+  .if $node.type == "list" {
+    .set.out."[".
+
+    .each.v.$node.value.
+      .set.line.call.str.concat
+        "\n"
+        (call.indent.(math.add.$level.1))
+        (call.pp.node.$v.(math.add.$level.1))
+        (if $trailing_commas { "," } else { "" }).
+
+      .set.out.call.str.concat.$out.$line.
+    .end.
+
+    .set.out.call.str.concat
+      $out
+      "\n"
+      (call.indent.$level)
+      "]".
+
+    .ret.$out.
+  }.
+
+  <<< primitives >>>
+  .ret.$node.value.
+.end.
+
+<<< ===================== Format Pipeline ===================== >>>
+
+.fn format.code.code.
+  .set.tokens.call.lex.$code.
+  .set.ast.call.parse.$tokens.
+
+  <<< normalize >>>
+  .set.ast.call.norm.node.$ast.
+
+  <<< pretty print >>>
+  .set.out.call.pp.node.$ast.0.
+
+  <<< EOF newline >>>
+  .if $ensure_newline_eof {
+    .set.out.call.str.ensure_newline.$out.
+  }.
+
+  .ret.$out.
+.end.
+
+<<< ===================== Diff ===================== >>>
+
+.fn diff.compute.old.new.
+  .ret.call.diff.unified.$old.$new.
+.end.
+
+<<< ===================== File Processing ===================== >>>
+
+.fn process.file.path.
+  .call.log.$path.
+
+  .set.old.call.read.$path.
+  .set.new.call.format.code.$old.
+
+  .if $old != $new {
+    .call.list.push.$changed.$path.
+
+    <<< write back >>>
+    .call.write.$path.$new.
+
+    <<< show diff >>>
+    .set.d.call.diff.compute.$old.$new.
+    .call.io.print.$d.
+  }.
+.end.
+
+<<< ===================== Batch ===================== >>>
+
+.fn run.all.
+  .set.files.call.fs.glob."**/*.ucl".
+
+  .each.f.$files.
+    .call.process.file.$f.
+  .end.
+
+  .call.log."changed=". (list.len.$changed).
+.end.
+
+<<< ===================== CI ===================== >>>
+
+.fn ci.check.
+  .set.failed.false.
+
+  .each.f.(fs.glob."**/*.ucl").
+    .set.old.call.read.$f.
+    .set.new.call.format.code.$old.
+
+    .if $old != $new {
+      .call.log."needs format ".$f.
+      .set.failed.true.
+    }.
+  .end.
+
+  .if $failed {
+    .call.sys.exit.1.
+  }.
+.end.
+
+<<< ===================== Entry ===================== >>>
+
+.fn.main.
+  .call.run.all.
+.end.
+
+.entry.main.
