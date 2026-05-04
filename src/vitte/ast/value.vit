@@ -1,254 +1,196 @@
+<<< =========================================================
+   Vitte AST — Runtime Values
+   evaluator / interpreter / execution layer
+   ========================================================= >>>
+
 space vitte/ast/value
 
-use vitte/ast/types { Type }
 
-<<< =========================================================
-   Runtime Values
-========================================================= >>>
+<<< ================= Base ================= >>>
 
-pick Value {
-
-    <<< primitives >>>
-    VInt(v: i64),
-    VFloat(v: f64),
-    VBool(v: bool),
-    VString(v: string),
-    VChar(v: string),
-
-    <<< special >>>
-    VUnit,
-    VNull,
-
-    <<< containers >>>
-    VList(items: [Value]),
-    VMap(keys: [string], values: [Value]),
-
-    <<< struct / form >>>
-    VStruct(name: string, fields: Map[string, Value]),
-
-    <<< enum / pick >>>
-    VVariant(name: string, fields: Map[string, Value]),
-
-    <<< pointer (low-level) >>>
-    VPointer(addr: i64),
-
-    <<< function (runtime) >>>
-    VClosure(fn_name: string, env: Map[string, Value])
+form Value {
+  kind: string
 }
 
-<<< =========================================================
-   Value Environment
-========================================================= >>>
 
-form ValEnv {
-    parent: *ValEnv,
-    vars: Map[string, Value]
+<<< ================= Primitives ================= >>>
+
+form ValueNumber {
+  kind: string
+  value: float
 }
 
-proc val_env_new(parent: *ValEnv) -> ValEnv {
-    give ValEnv {
-        parent: parent,
-        vars: Map.new()
-    }
+form ValueString {
+  kind: string
+  value: string
 }
 
-proc val_get(env: *ValEnv, name: string) -> Value {
-
-    if env.vars.has(name) {
-        give env.vars.get(name)
-    }
-
-    if env.parent != null {
-        give val_get(env.parent, name)
-    }
-
-    give Value.VUnit
+form ValueBool {
+  kind: string
+  value: bool
 }
 
-proc val_set(env: *ValEnv, name: string, v: Value) {
-    env.vars.insert(name, v)
+form ValueNull {
+  kind: string
 }
 
-<<< =========================================================
-   Value Equality
-========================================================= >>>
 
-proc value_eq(a: Value, b: Value) -> bool {
+<<< ================= Collections ================= >>>
 
-    match a {
-
-        case Value.VInt(x) {
-            when b is Value.VInt(y) { give x == y }
-        }
-
-        case Value.VFloat(x) {
-            when b is Value.VFloat(y) { give x == y }
-        }
-
-        case Value.VBool(x) {
-            when b is Value.VBool(y) { give x == y }
-        }
-
-        case Value.VString(x) {
-            when b is Value.VString(y) { give x == y }
-        }
-
-        case Value.VChar(x) {
-            when b is Value.VChar(y) { give x == y }
-        }
-
-        case Value.VUnit {
-            when b is Value.VUnit { give true }
-        }
-
-        case Value.VList(xs) {
-            when b is Value.VList(ys) {
-
-                if xs.len() != ys.len() {
-                    give false
-                }
-
-                let i = 0
-                for v in xs {
-                    if not value_eq(v, ys[i]) {
-                        give false
-                    }
-                    i = i + 1
-                }
-
-                give true
-            }
-        }
-
-        case Value.VStruct(name_a, fa) {
-            when b is Value.VStruct(name_b, fb) {
-
-                if name_a != name_b {
-                    give false
-                }
-
-                for k in fa.keys() {
-                    if not fb.has(k) {
-                        give false
-                    }
-                    if not value_eq(fa.get(k), fb.get(k)) {
-                        give false
-                    }
-                }
-
-                give true
-            }
-        }
-
-        case Value.VVariant(name_a, fa) {
-            when b is Value.VVariant(name_b, fb) {
-
-                if name_a != name_b {
-                    give false
-                }
-
-                for k in fa.keys() {
-                    if not fb.has(k) {
-                        give false
-                    }
-                    if not value_eq(fa.get(k), fb.get(k)) {
-                        give false
-                    }
-                }
-
-                give true
-            }
-        }
-
-        else {
-            give false
-        }
-    }
-
-    give false
+form ValueList {
+  kind: string
+  elements: [Value]
 }
 
-<<< =========================================================
-   Type Of (runtime)
-========================================================= >>>
-
-proc value_type(v: Value) -> Type {
-
-    match v {
-
-        case Value.VInt(_) { give Type.TInt }
-        case Value.VFloat(_) { give Type.TFloat }
-        case Value.VBool(_) { give Type.TBool }
-        case Value.VString(_) { give Type.TString }
-
-        case Value.VList(_) {
-            give Type.TList(inner: Type.TUnknown)
-        }
-
-        case Value.VPointer(_) {
-            give Type.TPointer(inner: Type.TUnknown)
-        }
-
-        case Value.VStruct(name, _) {
-            give Type.TStruct(name: name, fields: [])
-        }
-
-        case Value.VVariant(name, _) {
-            give Type.TEnum(name: name, variants: [])
-        }
-
-        case Value.VClosure(_, _) {
-            give Type.TProc(params: [], ret: Type.TUnknown)
-        }
-
-        else {
-            give Type.TUnknown
-        }
-    }
+form ValueMapEntry {
+  key: string
+  value: Value
 }
 
-<<< =========================================================
-   Helpers
-========================================================= >>>
-
-proc value_is_truthy(v: Value) -> bool {
-
-    match v {
-        case Value.VBool(b) { give b }
-        case Value.VInt(x) { give x != 0 }
-        case Value.VString(s) { give s.len() > 0 }
-        case Value.VNull { give false }
-        case Value.VUnit { give false }
-        else { give true }
-    }
+form ValueMap {
+  kind: string
+  entries: [ValueMapEntry]
 }
 
-proc value_to_string(v: Value) -> string {
 
-    match v {
-        case Value.VInt(x) { give "" + x }
-        case Value.VFloat(x) { give "" + x }
-        case Value.VBool(b) { give "" + b }
-        case Value.VString(s) { give s }
-        case Value.VUnit { give "unit" }
-        case Value.VNull { give "null" }
-        else { give "<value>" }
-    }
+<<< ================= Functions ================= >>>
+
+form ValueFunction {
+  kind: string
+  name: string
+  params: [string]
+  <<< closure env futur >>>
 }
 
-<<< =========================================================
-   Entry test
-========================================================= >>>
+form ValueBuiltin {
+  kind: string
+  name: string
+}
 
-entry test at vitte/ast/value {
 
-    let env = val_env_new(null)
+<<< ================= Advanced ================= >>>
 
-    val_set(&env, "x", Value.VInt(v: 42))
+form ValueObject {
+  kind: string
+  fields: [ValueMapEntry]
+}
 
-    let v = val_get(&env, "x")
+form ValueError {
+  kind: string
+  message: string
+}
 
-    let s = value_to_string(v)
 
-    emit s
+<<< ================= Tagged Union ================= >>>
+
+pick ValueNode {
+  case Number(ValueNumber)
+  case String(ValueString)
+  case Bool(ValueBool)
+  case Null(ValueNull)
+  case List(ValueList)
+  case Map(ValueMap)
+  case Function(ValueFunction)
+  case Builtin(ValueBuiltin)
+  case Object(ValueObject)
+  case Error(ValueError)
+}
+
+
+<<< ================= Constructors ================= >>>
+
+proc v_number(x: float) -> ValueNode {
+  give ValueNode.Number({
+    kind: "number"
+    value: x
+  })
+}
+
+proc v_string(s: string) -> ValueNode {
+  give ValueNode.String({
+    kind: "string"
+    value: s
+  })
+}
+
+proc v_bool(b: bool) -> ValueNode {
+  give ValueNode.Bool({
+    kind: "bool"
+    value: b
+  })
+}
+
+proc v_null() -> ValueNode {
+  give ValueNode.Null({
+    kind: "null"
+  })
+}
+
+proc v_list(xs: [ValueNode]) -> ValueNode {
+  give ValueNode.List({
+    kind: "list"
+    elements: xs
+  })
+}
+
+proc v_map(entries: [ValueMapEntry]) -> ValueNode {
+  give ValueNode.Map({
+    kind: "map"
+    entries: entries
+  })
+}
+
+
+<<< ================= Helpers ================= >>>
+
+proc is_truthy(v: ValueNode) -> bool {
+  select v
+    when ValueNode.Bool(b) give b.value
+    when ValueNode.Null(_) give false
+    when ValueNode.Number(n) give n.value != 0
+    when ValueNode.String(s) give s.value != ""
+    otherwise give true
+}
+
+
+proc equals(a: ValueNode, b: ValueNode) -> bool {
+  select a
+    when ValueNode.Number(x)
+      select b
+        when ValueNode.Number(y)
+          give x.value == y.value
+
+    when ValueNode.String(x)
+      select b
+        when ValueNode.String(y)
+          give x.value == y.value
+
+    when ValueNode.Bool(x)
+      select b
+        when ValueNode.Bool(y)
+          give x.value == y.value
+
+    when ValueNode.Null(_)
+      select b
+        when ValueNode.Null(_)
+          give true
+
+  give false
+}
+
+
+<<< ================= Debug ================= >>>
+
+proc to_string(v: ValueNode) -> string {
+  select v
+    when ValueNode.Number(n) give "num(" + n.value + ")"
+    when ValueNode.String(s) give "str(" + s.value + ")"
+    when ValueNode.Bool(b) give "bool(" + b.value + ")"
+    when ValueNode.Null(_) give "null"
+    when ValueNode.List(_) give "list(...)"
+    when ValueNode.Map(_) give "map(...)"
+    when ValueNode.Function(f) give "fn(" + f.name + ")"
+    when ValueNode.Builtin(b) give "builtin(" + b.name + ")"
+    when ValueNode.Object(_) give "object(...)"
+    when ValueNode.Error(e) give "error(" + e.message + ")"
 }
