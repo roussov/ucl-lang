@@ -1,2 +1,235 @@
-.use sys
-.print "Building UCL"
+<<< =========================================================
+   DotS Build System 
+   targets / deps / cache / parallel / profiles / CI / packaging
+   ========================================================= >>>
+
+.module.build.
+
+.import.core.fs.
+.import.core.path.
+.import.core.process.
+.import.core.hash.
+.import.core.time.
+.import.core.json.
+.import.core.list.
+.import.core.map.
+.import.core.str.
+.import.core.thread.
+.import.core.sys.
+
+<<< ===================== Global Config ===================== >>>
+
+.set.project_name."ucl-lang".
+.set.build_dir."build".
+.set.src_dir."src".
+.set.out_dir."bin".
+
+.set.profile."release".      # dev | release | debug
+.set.parallelism.8.
+.set.enable_cache.true.
+.set.enable_watch.false.
+
+.set.targets.map.new.
+.set.cache.map.new.
+
+<<< ===================== Utils ===================== >>>
+
+.fn.log.msg.
+  .call.io.print."[build] ".$msg.
+.end.
+
+.fn.hash_file.path.
+  .ret.call.hash.file.$path.
+.end.
+
+.fn.ensure_dir.path.
+  .call.fs.mkdir_p.$path.
+.end.
+
+<<< ===================== Target Definition ===================== >>>
+
+.fn.target.define.name.inputs.outputs.cmd.deps.
+  .set.t.map.new.
+  .set.t.name.$name.
+  .set.t.inputs.$inputs.
+  .set.t.outputs.$outputs.
+  .set.t.cmd.$cmd.
+  .set.t.deps.$deps.
+  .call.map.set.$targets.$name.$t.
+.end.
+
+<<< ===================== Cache ===================== >>>
+
+.fn.cache.key.target.
+  .set.h.list.new.
+  .each.f.$target.inputs.
+    .set.hash.call.hash_file.$f.
+    .call.list.push.$h.$hash.
+  .end.
+  .ret.call.hash.combine.$h.
+.end.
+
+.fn.cache.hit.target.
+  .set.k.call.cache.key.$target.
+  .ret.call.map.has.$cache.$k.
+.end.
+
+.fn.cache.store.target.
+  .set.k.call.cache.key.$target.
+  .call.map.set.$cache.$k.true.
+.end.
+
+<<< ===================== Dependency Resolution ===================== >>>
+
+.fn.resolve.deps.target.
+  .each.d.$target.deps.
+    .set.dep.call.map.get.$targets.$d.
+    .call.execute.target.$dep.
+  .end.
+.end.
+
+<<< ===================== Execution ===================== >>>
+
+.fn.execute.target.target.
+  .call.log."target=".$target.name.
+
+  <<< deps first >>>
+  .call.resolve.deps.$target.
+
+  <<< cache check >>>
+  .if $enable_cache && call.cache.hit.$target {
+    .call.log."cache hit ".$target.name.
+    .ret.
+  }.
+
+  <<< ensure output dirs >>>
+  .each.o.$target.outputs.
+    .set.dir.call.path.dir.$o.
+    .call.ensure_dir.$dir.
+  .end.
+
+  <<< run command >>>
+  .call.process.exec.$target.cmd.
+
+  <<< store cache >>>
+  .call.cache.store.$target.
+.end.
+
+<<< ===================== Parallel Scheduler ===================== >>>
+
+.fn.execute.parallel.
+  .set.queue.call.map.values.$targets.
+
+  .loop.i.0.$parallelism.
+    .spawn.thread.
+      .loop.
+        .set.t.call.list.pop.$queue.
+        .if $t == null { .break. }.
+        .call.execute.target.$t.
+      .end.
+    .end.
+  .end.
+
+  .call.thread.join_all.
+.end.
+
+<<< ===================== Watch Mode ===================== >>>
+
+.fn.watch.loop.
+  .call.log."watch mode enabled".
+  .loop.
+    .set.changed.call.fs.watch.$src_dir.
+    .if $changed {
+      .call.log."changes detected".
+      .call.build.all.
+    }.
+  .end.
+.end.
+
+<<< ===================== Targets ===================== >>>
+
+<<< compile sources >>>
+
+.fn.setup.targets.
+  .call.target.define
+    "compile"
+    [ "src/main.dotS" ]
+    [ "build/main.o" ]
+    "dotsc src/main.dotS -o build/main.o"
+    [].
+
+  .call.target.define
+    "link"
+    [ "build/main.o" ]
+    [ "bin/app" ]
+    "dotsc-link build/main.o -o bin/app"
+    [ "compile" ].
+
+  .call.target.define
+    "package"
+    [ "bin/app" ]
+    [ "dist/app.tar.gz" ]
+    "tar -czf dist/app.tar.gz bin/app"
+    [ "link" ].
+.end.
+
+<<< ===================== Profiles ===================== >>>
+
+.fn.apply.profile.
+  .if $profile == "debug" {
+    .set.cflags."-O0 -g".
+  }.
+  .if $profile == "release" {
+    .set.cflags."-O3".
+  }.
+.end.
+
+<<< ===================== Build Entry ===================== >>>
+
+.fn.build.all.
+  .call.apply.profile.
+  .call.setup.targets.
+
+  .if $parallelism > 1 {
+    .call.execute.parallel.
+  } else {
+    .each.t.(map.values.$targets).
+      .call.execute.target.$t.
+    .end.
+  }.
+.end.
+
+<<< ===================== Clean ===================== >>>
+
+.fn.clean.
+  .call.fs.rm_rf.$build_dir.
+  .call.fs.rm_rf.$out_dir.
+  .call.log."clean done".
+.end.
+
+<<< ===================== CI ===================== >>>
+
+.fn.ci.run.
+  .call.build.all.
+
+  <<< simple test >>>
+  .set.ok.call.fs.exists."bin/app".
+  .if !$ok {
+    .call.log."build failed".
+    .call.sys.exit.1.
+  }.
+.end.
+
+<<< ===================== Entry ===================== >>>
+
+.fn.main.
+  .call.log."project=".$project_name.
+
+  .call.build.all.
+
+  .if $enable_watch {
+    .call.watch.loop.
+  }.
+.end.
+
+.entry.main.
